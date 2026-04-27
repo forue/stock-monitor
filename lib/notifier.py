@@ -136,18 +136,23 @@ def _set_state(stock_code: str, state: dict):
 
 
 def _should_escalate(stock_code: str, stock_name: str, current_price: float,
-                     change_pct: float, notif: dict) -> Optional[str]:
+                     change_pct: float, notif: dict,
+                     escalation_config: dict = None,
+                     volatility: float = None) -> Optional[str]:
     """
     判断是否应该发送本次告警
 
+    Args:
+        volatility: 当前价格波动率（用于动态冷却计算），如 metrics['price_change_rate']
     Returns:
-        None  → 不发（未达到阶梯条件或被限流）
-        str   → 场景 key，表示可以发送
+        None  → 不发
+        str   → 场景 key
     """
     _reset_daily_state()
     state = _get_state(stock_code)
     now = time.time()
     abs_pct = abs(change_pct)
+    config = escalation_config or {}
 
     max_daily = notif.get('max_daily_alerts_per_stock', MAX_DAILY_NORMAL)
     min_interval = notif.get('min_alert_interval', 600)
@@ -163,9 +168,17 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
     last_time = state.get("time", 0)
     elapsed = now - last_time
 
+    # 动态冷却：波动率越高冷却越长
+    base_cooldown = config.get('cooldown_seconds', COOLDOWN_SECONDS)
+    if volatility is not None and volatility > 0:
+        multiplier = max(0.5, min(3.0, volatility * 100))
+        cooldown = int(base_cooldown * multiplier)
+    else:
+        cooldown = base_cooldown
+
     # 冷却保护：极端行情绕过
-    if elapsed < COOLDOWN_SECONDS and not is_extreme:
-        log(f"{stock_name} 冷却中 ({elapsed:.0f}s/{COOLDOWN_SECONDS}s)，跳过")
+    if elapsed < cooldown and not is_extreme:
+        log(f"{stock_name} 冷却中 ({elapsed:.0f}s/{cooldown}s, 波动率{volatility:.2%})，跳过")
         return None
 
     # 短期防重复：min_interval 秒内不重复（非极端）
@@ -245,10 +258,13 @@ def send_alert(stock: dict, stock_data: dict, metrics: dict, config: dict,
     change_pct = metrics['price_change_pct']
 
     notif = config.get('notification', {})
+    escalation_config = config.get('escalation', {})
 
-    # 阶梯式递增判断
+    # 阶梯式递增判断（传入波动率用于动态冷却）
+    volatility = metrics.get('price_change_rate')
     escalation_scenario = _should_escalate(stock_code, stock_name,
-                                           current_price, change_pct, notif)
+                                           current_price, change_pct, notif,
+                                           escalation_config, volatility)
     if escalation_scenario is None:
         return False
 
