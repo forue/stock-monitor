@@ -1,0 +1,64 @@
+# 股票监控配置 v3.0
+
+# 监控的股票列表
+stocks:
+  - code: "600104"
+    name: "上汽集团"
+    enabled: true
+  - code: "002475"
+    name: "立讯精密"
+    enabled: true
+  - code: "600519"
+    name: "贵州茅台"
+    enabled: true
+
+# L1 阈值 (免费数据筛查)
+l1_thresholds:
+  price_change_rate: 0.007    # 0.7%
+  price_change_pct: 2.5       # 2.5%
+  volume_ratio: 2.5           # 2.5 倍
+  amplitude: 0.02             # 2.0%
+
+# L2 阈值 (付费 API 验证)
+l2_thresholds:
+  price_change_pct: 3.0       # 3.0%
+  volume_ratio: 3.0           # 3.0 倍
+
+# 时间策略
+time_strategy:
+  intervals:
+    high_volatility: 2        # 高波动期 (秒)
+    normal: 5                 # 正常期 (秒)
+    off_hours: 300            # 休市/夜间 (秒)
+
+# API 配置
+api:
+  # 免费数据源
+  free_sources:
+    - name: "sina"
+      url_template: "http://hq.sinajs.cn/sz{code}"
+      priority: 1
+  
+  # 付费数据源
+  paid_sources:
+    - name: "tushare"
+      api_key_env: "TUSHARE_TOKEN"
+      daily_limit: 1000
+      priority: 1
+
+# QQ 推送配置
+notification:
+  enabled: true
+  channel: "qqbot"
+
+# 日志配置
+logging:
+  level: "INFO"
+  file: "/home/node/.openclaw/workspace/stock-monitor/logs/monitor.log"
+  max_size: "10MB"
+  backup_count: 5
+
+# 数据库配置
+database:
+  type: "sqlite"
+  path: "/home/node/.openclaw/workspace/stock-monitor/data/stock_monitor.db"

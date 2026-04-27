@@ -1,0 +1,87 @@
+{
+  "_comment": "股票监控配置 v4.1 — 量价组合确认 + 阶梯式递增告警 + 多场景分类",
+  "stocks": [
+    {"code": "600104", "name": "上汽集团", "enabled": true},
+    {"code": "002475", "name": "立讯精密", "enabled": true},
+    {"code": "600519", "name": "贵州茅台", "enabled": true},
+    {"code": "002402", "name": "和而泰", "enabled": true},
+    {"code": "601611", "name": "中国核建", "enabled": true},
+    {"code": "601012", "name": "隆基绿能", "enabled": true},
+    {"code": "600028", "name": "中国石化", "enabled": true},
+    {"code": "002736", "name": "国信证券", "enabled": true},
+    {"code": "601890", "name": "亚星锚链", "enabled": true},
+    {"code": "600150", "name": "中国船舶", "enabled": true}
+  ],
+
+  "l1_thresholds": {
+    "_comment": "L1 初筛：至少2个条件同时满足 + 连续2次命中",
+    "price_change_rate": 0.01,
+    "price_change_pct": 2.5,
+    "volume_ratio": 2.0,
+    "amplitude": 0.02,
+    "min_conditions_required": 2,
+    "min_consecutive_hits": 2,
+    "volume_ratio_by_session": {
+      "opening": 3.0,
+      "morning": 2.0,
+      "afternoon": 2.0,
+      "closing": 2.5
+    }
+  },
+
+  "l2_thresholds": {
+    "_comment": "L2 确认: 量价共振 A|B|C 三条路径 + 连续2次确认",
+    "price_change_pct": 3.0,
+    "volume_ratio": 3.0,
+    "extreme_price_change_pct": 5.0,
+    "extreme_volume_ratio": 6.0,
+    "min_price_for_volume": 1.0,
+    "min_consecutive_hits": 2,
+    "volume_ratio_by_session": {
+      "opening": 5.0,
+      "morning": 3.0,
+      "afternoon": 3.0,
+      "closing": 4.0
+    }
+  },
+
+  "escalation": {
+    "_comment": "阶梯式递增告警参数",
+    "cooldown_seconds": 180,
+    "trend_deviation_pct": 2.0,
+    "reversal_deviation_pct": 1.5,
+    "time_decay_seconds": 1800,
+    "time_decay_deviation_pct": 1.0,
+    "extreme_pct_threshold": 6.0,
+    "max_daily_normal": 8,
+    "max_daily_total": 15
+  },
+
+  "time_strategy": {
+    "intervals": {
+      "high_volatility": 3,
+      "normal": 8,
+      "off_hours": 300
+    }
+  },
+
+  "notification": {
+    "_comment": "QQ 推送敏感信息 (qq_app_id/qq_client_secret/user_openid) 已迁移至 .env 文件",
+    "enabled": true,
+    "channel": "qqbot_c2c",
+    "min_alert_interval": 600,
+    "max_daily_alerts_per_stock": 8
+  },
+
+  "logging": {
+    "level": "INFO",
+    "file": "/home/node/.openclaw/workspace/stock-monitor/logs/monitor.log",
+    "max_size": "10MB",
+    "backup_count": 5
+  },
+
+  "database": {
+    "type": "sqlite",
+    "path": "/home/node/.openclaw/workspace/stock-monitor/data/stock_monitor.db"
+  }
+}
