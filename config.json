@@ -1,7 +1,18 @@
 {
   "_comment": "股票监控配置 v4.1 — 量价组合确认 + 阶梯式递增告警 + 多场景分类",
   "stocks": [
-    {"code": "600104", "name": "上汽集团", "enabled": true},
+    {"code": "600104", "name": "上汽集团", "enabled": true,
+     "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 8,
+        "ma_slow": 20,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.80,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+     }},
     {"code": "002475", "name": "立讯精密", "enabled": true},
     {"code": "600519", "name": "贵州茅台", "enabled": true},
     {"code": "002402", "name": "和而泰", "enabled": true},
@@ -57,15 +68,28 @@
     "max_daily_total": 15
   },
 
-  "time_strategy": {
-    "intervals": {
-      "high_volatility": 3,
-      "normal": 8,
-      "off_hours": 300
-    }
-  },
+    "time_strategy": {
+      "intervals": {
+        "high_volatility": 3,
+        "normal": 8,
+        "off_hours": 300
+      }
+    },
 
-  "notification": {
+    "tech_analysis_defaults": {
+      "_comment": "技术指标全局默认（每只股票可独立覆盖）",
+      "enabled": false,
+      "ma_fast": 8,
+      "ma_slow": 20,
+      "ma_filter": 60,
+      "ma_filter_pct": 0.80,
+      "rsi_period": 14,
+      "rsi_max": 70,
+      "check_interval": 300,
+      "min_signal_interval": 3600
+    },
+
+    "notification": {
     "_comment": "QQ 推送敏感信息 (qq_app_id/qq_client_secret/user_openid) 已迁移至 .env 文件",
     "enabled": true,
     "channel": "qqbot_c2c",

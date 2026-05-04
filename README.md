@@ -9,6 +9,47 @@ A 股异动实时监控 + QQ 推送，常驻进程 + Cron 保活，零运维。
 ├── monitor-daemon.py          # 常驻监控进程 (主程序)
 ├── config.json                # 配置文件 (v4.1)
 ├── config.yaml                # 旧版配置 (已弃用，以 config.json 为准)
+├── .env                       # 环境变量（敏感信息，不提交）
+├── .env.example              # 环境变量模板
+├── .gitignore                # Git 排除规则
+├── requirements.txt           # Python 依赖 (仅 requests)
+├── lib/                       # 核心模块
+│   ├── indicators.py           #   技术指标计算 (MA/RSI/金叉死叉)  [新增]
+│   ├── config.py              #   配置加载 / 热加载 / .env 读取
+│   ├── logger.py              #   日志系统 (RotatingFileHandler)
+│   ├── trading_calendar.py    #   A 股交易日历 / 时段判断 / 时间占比
+│   ├── data_fetcher.py        #   多源数据获取 (腾讯→东方财富→新浪→网易)
+│   ├── volatility.py          #   波动率 / 涨跌幅 / 振幅 / 量比计算
+│   ├── alerter.py             #   L1/L2 量价组合确认 + 9种场景分类 + 技术指标买卖信号  [扩展]
+│   ├── notifier.py            #   阶梯式递增告警 + 交易信号推送 + QQ C2C 推送  [扩展]
+│   ├── database.py            #   SQLite 操作 / 数据清理
+│   └── process.py             #   PID 管理 / 信号处理 / 可中断 sleep
+├── scripts/
+│   ├── keepalive.sh           #   Cron 保活脚本
+│   ├── send-qq-alert.py       #   QQ 告警队列推送脚本
+│   ├── test-flow.py           #   全流程测试
+│   ├── test-qq-push.py        #   QQ 推送测试
+│   └── trading_calendar.py    #   交易日历独立工具
+├── test-alert-push.py         # 模拟告警推送测试 (临时，可删)
+├── test-fetch-data.py         # 数据源获取测试 (临时，可删)
+├── test-paid-sources.py       # 付费数据源测试 (临时，可删)
+├── test-qq-push.py            # QQ 推送独立测试 (临时，可删)
+├── logs/
+│   ├── monitor.log            #   运行日志 (10MB 轮转，5 份)
+│   ├── keepalive.log          #   保活日志
+│   ├── alerts.json            #   告警记录
+│   ├── qq-alert-queue.jsonl   #   QQ 告警队列
+│   └── qq-alert-processed.jsonl # 已处理告警
+├── data/
+│   └── stock_monitor.db       #   SQLite 数据库 (30 天自动清理)
+└── docs/
+    ├── DESIGN.md              #   系统设计文档
+    └── TRIGGER.md             #   异动触发说明
+```
+/home/node/.openclaw/workspace/stock-monitor/
+├── monitor-daemon.py          # 常驻监控进程 (主程序)
+├── config.json                # 配置文件 (v4.1)
+├── config.yaml                # 旧版配置 (已弃用，以 config.json 为准)
 ├── requirements.txt           # Python 依赖 (仅 requests)
 ├── lib/                       # 核心模块
 │   ├── config.py              #   配置加载 / 热加载
@@ -222,6 +263,104 @@ cron 触发 keepalive.sh
 | 跌势加速 | 🧊 | 同向下跌偏离参考价 ≥ 2% | 趋势强化 |
 | 低位反弹 | 🔄 | 先跌后涨偏离参考价 ≥ 1.5% | 反转信号 |
 | 高位回落 | ⚠️ | 先涨后跌偏离参考价 ≥ 1.5% | 见顶信号 |
+
+## 🔔 技术指标买卖信号
+
+系统新增基于双均线（MA）+ RSI 的买卖信号提示，每只股票可独立配置参数。
+
+### 信号规则
+
+| 信号 | 触发条件 | 附加过滤 |
+|------|----------|----------|
+| **金叉（买入）** | MA`fast` 上穿 MA`slow` | 收盘价 ≥ MA`filter` × `filter_pct` 且 RSI < `rsi_max` |
+| **死叉（卖出）** | MA`fast` 下穿 MA`slow` | 无附加条件，立即提示 |
+
+### 每只股票独立配置
+
+在 `config.json` 的 `stocks` 数组中：
+
+```json
+{
+  "code": "600104", "name": "上汽集团", "enabled": true,
+  "tech_analysis": {
+    "enabled": true,
+    "ma_fast": 8,
+    "ma_slow": 20,
+    "ma_filter": 60,
+    "ma_filter_pct": 0.80,
+    "rsi_period": 14,
+    "rsi_max": 70,
+    "check_interval": 300,
+    "min_signal_interval": 3600
+  }
+}
+```
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `ma_fast` | 快线周期 | 8 |
+| `ma_slow` | 慢线周期 | 20 |
+| `ma_filter` | 过滤均线周期 | 60 |
+| `ma_filter_pct` | 收盘价需 ≥ 过滤均线×此比例 | 0.80 |
+| `rsi_period` | RSI 周期 | 14 |
+| `rsi_max` | 买入时 RSI 上限 | 70 |
+| `check_interval` | 技术指标检查间隔（秒） | 300 |
+| `min_signal_interval` | 同方向信号最小间隔（秒） | 3600 |
+
+### 全局默认值
+
+在 `config.json` 顶层添加 `tech_analysis_defaults`：
+
+```json
+{
+  "tech_analysis_defaults": {
+    "ma_fast": 8,
+    "ma_slow": 20,
+    "ma_filter": 60,
+    "ma_filter_pct": 0.80,
+    "rsi_period": 14,
+    "rsi_max": 70,
+    "check_interval": 300,
+    "min_signal_interval": 3600
+  }
+}
+```
+
+### 信号推送消息格式
+
+**买入提示：**
+
+```
+🔔 【买入信号】价量齐动 + 技术面共振
+
+📊 上汽集团 (600104)
+💰 当前价：¥15.50
+📈 MA8=15.20 上穿 MA20=14.80 ✅
+📊 MA60=15.00，收盘价占比 103.3%（≥80%✅）
+📉 RSI14=62.5（<70✅）
+⏰ 时间：09:58:15
+
+请关注买入机会！📈
+```
+
+**卖出提示：**
+
+```
+🔻 【卖出信号】技术面死叉
+
+📊 上汽集团 (600104)
+💰 当前价：¥14.80
+📉 MA8=14.50 下穿 MA20=14.90 ⚠️
+⏰ 时间：14:25:30
+
+请关注卖出时机！🔻
+```
+
+### 防重复机制
+
+- 同类型信号（如连续金叉）：`min_signal_interval` 秒内不重复
+- 不同类型信号（金叉后死叉）：不受间隔限制，立即提示
+- 每只股票独立维护信号状态
 
 ## 📡 多源数据降级链
 

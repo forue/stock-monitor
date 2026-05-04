@@ -306,3 +306,166 @@ def build_alert_message(stock: dict, stock_data: dict, metrics: dict,
 请速速查看！🦐"""
 
     return message
+
+
+# ============ 技术指标买卖信号 ===========
+
+from lib.indicators import (
+    get_close_history, calc_ma, calc_rsi,
+    check_golden_cross, check_death_cross,
+    get_prev_ma, save_curr_ma,
+)
+import time
+
+
+_trading_signal_state = {}
+
+def _get_signal_state(stock_code):
+    return _trading_signal_state.get(stock_code, {})
+
+
+def _update_signal_state(stock_code, signal_type):
+    _trading_signal_state[stock_code] = {
+        'last_signal': signal_type,
+        'last_time': time.time(),
+    }
+
+
+def check_trading_signal(stock_code, current_price,
+                          stock_config, config,
+                          db_path):
+    """
+    检查金叉/死叉买卖信号
+
+    Returns:
+        None -> 无信号
+        dict  -> {'signal': 'buy'|'sell', 'reason': str, ...}
+    """
+    tech = stock_config.get('tech_analysis') or config.get('tech_analysis_defaults', {})
+    if not tech.get('enabled', False):
+        return None
+
+    ma_fast_period = tech.get('ma_fast', 8)
+    ma_slow_period = tech.get('ma_slow', 20)
+    ma_filter_period = tech.get('ma_filter', 60)
+    ma_filter_pct = tech.get('ma_filter_pct', 0.80)
+    rsi_period = tech.get('rsi_period', 14)
+    rsi_max = tech.get('rsi_max', 70)
+    min_signal_interval = tech.get('min_signal_interval', 3600)
+
+    # 1. 获取历史收盘价
+    max_days = max(ma_slow_period, ma_filter_period, rsi_period + 1)
+    closes = get_close_history(db_path, stock_code, max_days)
+
+    if len(closes) < max(ma_slow_period, rsi_period + 1):
+        return None
+
+    # 2. 计算各均线
+    ma_fast = calc_ma(closes, ma_fast_period)
+    ma_slow = calc_ma(closes, ma_slow_period)
+    ma_filter = calc_ma(closes, ma_filter_period)
+    rsi = calc_rsi(closes, rsi_period)
+
+    if ma_fast is None or ma_slow is None:
+        return None
+
+    # 3. 获取上期 MA 值（用于判断穿越）
+    prev_fast, prev_slow = get_prev_ma(stock_code)
+
+    # 4. 保存本期 MA 值（供下期对比）
+    save_curr_ma(stock_code, ma_fast, ma_slow)
+
+    # 5. 防重复：同类型信号 min_signal_interval 秒内不重复
+    state = _get_signal_state(stock_code)
+    now = time.time()
+    if state:
+        last_signal = state.get('last_signal')
+        last_time = state.get('last_time', 0)
+        if last_time and (now - last_time) < min_signal_interval:
+            if (last_signal == 'buy' and check_golden_cross(ma_fast, ma_slow, prev_fast, prev_slow)) or \
+               (last_signal == 'sell' and check_death_cross(ma_fast, ma_slow, prev_fast, prev_slow)):
+                return None
+
+    # 6. 金叉判断 + 附加条件
+    if check_golden_cross(ma_fast, ma_slow, prev_fast, prev_slow):
+        filter_ok = current_price >= (ma_filter or 0) * ma_filter_pct
+        rsi_ok = rsi is None or rsi < rsi_max
+
+        if filter_ok and rsi_ok:
+            _update_signal_state(stock_code, 'buy')
+            return {
+                'signal': 'buy',
+                'reason': '金叉',
+                'ma_fast': ma_fast, 'ma_slow': ma_slow,
+                'ma_filter': ma_filter, 'ma_filter_pct': ma_filter_pct,
+                'rsi': rsi, 'rsi_max': rsi_max,
+                'close': current_price,
+            }
+        else:
+            log(f"金叉触发但附加条件未满足 ({stock_code}): "
+                f"filter={'✅' if filter_ok else '❌'}({current_price:.2f} vs {ma_filter:.2f}*{ma_filter_pct:.0%}), "
+                f"RSI={'✅' if rsi_ok else '❌'}({rsi:.1f} vs {rsi_max})",
+                level="DEBUG")
+
+    # 7. 死叉判断（无需附加条件）
+    if check_death_cross(ma_fast, ma_slow, prev_fast, prev_slow):
+        _update_signal_state(stock_code, 'sell')
+        return {
+            'signal': 'sell',
+            'reason': '死叉',
+            'ma_fast': ma_fast, 'ma_slow': ma_slow,
+            'ma_filter': ma_filter,
+            'rsi': rsi,
+            'close': current_price,
+        }
+
+    return None
+
+
+# ============ 交易信号消息构建 ===========
+
+def build_trading_signal_message(stock, signal):
+    """构建买卖信号推送消息"""
+    stock_code = stock.get('code', 'UNKNOWN')
+    stock_name = stock.get('name', stock_code)
+    signal_type = signal.get('signal', 'buy')
+    ma_fast = signal.get('ma_fast', 0)
+    ma_slow = signal.get('ma_slow', 0)
+    ma_filter = signal.get('ma_filter', 0)
+    ma_filter_pct = signal.get('ma_filter_pct', 0.80)
+    rsi = signal.get('rsi')
+    rsi_max = signal.get('rsi_max', 70)
+    close = signal.get('close', 0)
+
+    if signal_type == 'buy':
+        header = '🔔 【买入信号】价量齐动 + 技术面共振'
+        icon = '📈'
+        reason_str = f'金叉：MA{int(ma_fast)} 上穿 MA{int(ma_slow)} ✅'
+        filter_ok = close >= ma_filter * ma_filter_pct
+        filter_str = f'MA{int(ma_filter)}：收盘价 ¥{close:.2f} 占比 {close/ma_filter*100:.1f}%' + \
+            f' {"✅" if filter_ok else "❌"} (≥{ma_filter_pct:.0%})'
+        rsi_str = f'RSI{len(str(int(rsi))) if rsi else "?"}：{rsi:.1f}' + \
+            f' {"✅" if rsi and rsi < rsi_max else "❌"} (<{rsi_max})'
+    else:
+        header = '🔻 【卖出信号】技术面死叉'
+        icon = '📉'
+        reason_str = f'死叉：MA{int(ma_fast)} 下穿 MA{int(ma_slow)} ⚠️'
+        filter_str = f'MA{int(ma_filter)}：收盘价 ¥{close:.2f}'
+        rsi_str = f'RSI{len(str(int(rsi))) if rsi else "?"}：{rsi:.1f}' if rsi else 'RSI：N/A'
+
+    from datetime import datetime
+    time_str = datetime.now().strftime('%H:%M:%S')
+
+    message = f"""{header}
+
+📊 {stock_name} ({stock_code})
+💰 当前价：¥{close:.2f}
+{icon} {reason_str}
+📊 {filter_str}
+📉 {rsi_str}
+⏰ 时间：{time_str}
+
+请关注{'买入机会' if signal_type == 'buy' else '卖出时机'}！{'📈' if signal_type == 'buy' else '🔻'}
+"""
+    return message
+

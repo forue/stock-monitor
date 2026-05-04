@@ -350,3 +350,64 @@ def _write_alert_file(stock_code: str, stock_name: str, current_price: float,
         log("告警已写入文件备份")
     except Exception as e:
         log(f"写入告警文件失败：{e}", level="ERROR")
+
+
+# ============ 交易信号推送 ===========
+
+def send_trading_signal(stock: dict, signal: dict, config: dict,
+                         base_dir: Path = None, alerts_file: Path = None) -> bool:
+    """
+    推送买卖信号：构建消息 → QQ 推送 + 文件备份
+    """
+    from lib.alerter import build_trading_signal_message
+
+    stock_code = stock.get('code', 'UNKNOWN')
+    stock_name = stock.get('name', stock_code)
+    signal_type = signal.get('signal', 'buy')
+
+    notif = config.get('notification', {})
+
+    # 构建消息
+    message = build_trading_signal_message(stock, signal)
+    log(f"准备推送交易信号 [{signal_type}]：{stock_name} {signal_type}信号")
+
+    # QQ 推送（优先从环境变量读取，config.json 作为 fallback）
+    app_id = os.environ.get('QQ_APP_ID') or notif.get('qq_app_id', '')
+    client_secret = os.environ.get('QQ_CLIENT_SECRET') or notif.get('qq_client_secret', '')
+    user_openid = os.environ.get('QQ_USER_OPENID') or notif.get('user_openid', '')
+
+    success = False
+    if all([app_id, client_secret, user_openid]):
+        token = qq_get_access_token(app_id, client_secret)
+        if token:
+            url = f"https://api.sgroup.qq.com/v2/users/{user_openid}/messages"
+            payload = {"content": message, "msg_type": 0}
+            try:
+                resp = requests.post(url, json=payload, headers={
+                    'Authorization': f'QQBot {token}',
+                    'Content-Type': 'application/json',
+                    'X-Union-Appid': app_id,
+                }, timeout=10)
+                if resp.status_code < 400:
+                    result = resp.json()
+                    msg_id = result.get('id', '')
+                    log(f"QQ C2C 交易信号发送成功！msg_id={msg_id}")
+                    success = True
+                else:
+                    log(f"QQ C2C 推送失败 HTTP {resp.status_code}: {resp.text[:500]}", level="ERROR")
+            except Exception as e:
+                log(f"QQ C2C 消息发送异常：{e}", level="ERROR")
+    else:
+        log("QQ 推送配置不完整，退化为写文件", level="ERROR")
+
+    # 写入文件备份
+    if base_dir and alerts_file:
+        _write_alert_file(
+            stock_code, stock_name,
+            signal.get('close', 0),
+            signal.get('close', 0),
+            None, message, base_dir, alerts_file
+        )
+
+    return success
+

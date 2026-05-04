@@ -38,8 +38,8 @@ from lib.config import load_config, reload_config_if_changed, init_config_mtime,
 from lib.trading_calendar import is_trading_session, get_check_interval
 from lib.data_fetcher import fetch_free_data
 from lib.volatility import calculate_volatility
-from lib.alerter import should_trigger_l1, confirm_alert, reset_stock_tracker
-from lib.notifier import send_alert
+from lib.alerter import should_trigger_l1, confirm_alert, reset_stock_tracker, check_trading_signal
+from lib.notifier import send_alert, send_trading_signal
 from lib.database import init_database, cleanup_old_data, DBWriter
 import lib.process as process_mod
 from lib.process import (check_and_write_pid, cleanup_pid,
@@ -140,6 +140,16 @@ def main():
                         reset_stock_tracker(stock_code)
                     else:
                         log(f"{stock_name} L2 验证未通过")
+
+                # 技术指标检查（低频，不阻塞异常监控）
+                stock_config = stock.get('tech_analysis', {})
+                if stock_config.get('enabled', False):
+                    signal = check_trading_signal(stock_code, current_price,
+                                                   stock_config, config, DB_FILE)
+                    if signal:
+                        log(f"🔔 {stock_name} {signal['reason']}信号：MA{signal['ma_fast']}/MA{signal['ma_slow']}")
+                        send_trading_signal(stock, signal, config,
+                                           BASE_DIR, ALERTS_FILE)
 
             # 3. 提交本轮写入
             db_writer.flush()
