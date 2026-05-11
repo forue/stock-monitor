@@ -8,11 +8,11 @@ A 股异动实时监控 + QQ 推送，常驻进程 + Cron 保活，零运维。
 /home/node/.openclaw/workspace/stock-monitor/
 ├── monitor-daemon.py          # 常驻监控进程 (主程序)
 ├── config.json                # 配置文件 (v4.1)
-├── config.yaml                # 旧版配置 (已弃用，以 config.json 为准)
 ├── .env                       # 环境变量（敏感信息，不提交）
 ├── .env.example              # 环境变量模板
 ├── .gitignore                # Git 排除规则
 ├── requirements.txt           # Python 依赖 (仅 requests)
+├── keepalive_check.sh        # 根级保活脚本 (Cron 调用)
 ├── lib/                       # 核心模块
 │   ├── indicators.py           #   技术指标计算 (MA/RSI/金叉死叉)  [新增]
 │   ├── config.py              #   配置加载 / 热加载 / .env 读取
@@ -28,14 +28,15 @@ A 股异动实时监控 + QQ 推送，常驻进程 + Cron 保活，零运维。
 │   ├── keepalive.sh           #   Cron 保活脚本
 │   ├── send-qq-alert.py       #   QQ 告警队列推送脚本
 │   ├── test-flow.py           #   全流程测试
-│   ├── test-qq-push.py        #   QQ 推送测试
-│   └── trading_calendar.py    #   交易日历独立工具
+│   └── test-qq-push.py        #   QQ 推送测试
 ├── test-alert-push.py         # 模拟告警推送测试 (临时，可删)
 ├── test-fetch-data.py         # 数据源获取测试 (临时，可删)
 ├── test-paid-sources.py       # 付费数据源测试 (临时，可删)
 ├── test-qq-push.py            # QQ 推送独立测试 (临时，可删)
+├── CLAUDE.md                 #   Claude Code 指引
 ├── logs/
 │   ├── monitor.log            #   运行日志 (10MB 轮转，5 份)
+│   ├── daemon-stdout.log      #   nohup 标准输出（独立文件）
 │   ├── keepalive.log          #   保活日志
 │   ├── alerts.json            #   告警记录
 │   ├── qq-alert-queue.jsonl   #   QQ 告警队列
@@ -45,45 +46,6 @@ A 股异动实时监控 + QQ 推送，常驻进程 + Cron 保活，零运维。
 └── docs/
     ├── DESIGN.md              #   系统设计文档
     └── TRIGGER.md             #   异动触发说明
-```
-/home/node/.openclaw/workspace/stock-monitor/
-├── monitor-daemon.py          # 常驻监控进程 (主程序)
-├── config.json                # 配置文件 (v4.1)
-├── config.yaml                # 旧版配置 (已弃用，以 config.json 为准)
-├── requirements.txt           # Python 依赖 (仅 requests)
-├── lib/                       # 核心模块
-│   ├── config.py              #   配置加载 / 热加载
-│   ├── logger.py              #   日志系统 (RotatingFileHandler)
-│   ├── trading_calendar.py    #   A 股交易日历 / 时段判断 / 时间占比
-│   ├── data_fetcher.py        #   多源数据获取 (腾讯→东方财富→新浪→网易)
-│   ├── volatility.py          #   波动率 / 涨跌幅 / 振幅 / 量比计算
-│   ├── alerter.py             #   L1/L2 量价组合确认 + 9种场景分类
-│   ├── notifier.py            #   阶梯式递增告警 + QQ C2C 推送
-│   ├── database.py            #   SQLite 操作 / 数据清理
-│   └── process.py             #   PID 管理 / 信号处理 / 可中断 sleep
-├── scripts/
-│   ├── keepalive.sh           #   Cron 保活脚本
-│   ├── send-qq-alert.py       #   QQ 告警队列推送脚本
-│   ├── test-flow.py           #   全流程测试
-│   ├── test-qq-push.py        #   QQ 推送测试
-│   └── trading_calendar.py    #   交易日历独立工具
-├── test-alert-push.py         # 模拟告警推送测试 (临时，可删)
-├── test-fetch-data.py         # 数据源获取测试 (临时，可删)
-├── test-paid-sources.py       # 付费数据源测试 (临时，可删)
-├── test-qq-push.py            # QQ 推送独立测试 (临时，可删)
-├── logs/
-│   ├── monitor.log            #   运行日志 (10MB 轮转，5 份)
-│   ├── keepalive.log          #   保活日志
-│   ├── alerts.json            #   告警记录
-│   ├── qq-alert-queue.jsonl   #   QQ 告警队列
-│   └── qq-alert-processed.jsonl # 已处理告警
-├── data/
-│   └── stock_monitor.db       #   SQLite 数据库 (30 天自动清理)
-└── docs/
-    ├── DESIGN.md              #   系统设计文档
-    └── TRIGGER.md             #   异动触发说明
-```
-
 ## 🚀 快速启动
 
 ### 0. 配置凭证
@@ -107,7 +69,7 @@ Ctrl+C 可优雅退出。
 
 ```bash
 cd /home/node/.openclaw/workspace/stock-monitor
-nohup python3 monitor-daemon.py >> logs/monitor.log 2>&1 &
+nohup python3 monitor-daemon.py >> logs/daemon-stdout.log 2>&1 &
 echo $! > /tmp/stock-monitor.pid
 ```
 
@@ -546,10 +508,10 @@ conn.close()
 {
   "escalation": {
     "cooldown_seconds": 180,
-    "trend_deviation_pct": 2.0,
-    "reversal_deviation_pct": 1.5,
+    "trend_deviation": 0.02,
+    "reversal_deviation": 0.015,
     "time_decay_seconds": 1800,
-    "time_decay_deviation_pct": 1.0,
+    "time_decay_deviation": 0.01,
     "extreme_pct_threshold": 6.0,
     "max_daily_normal": 8,
     "max_daily_total": 15
@@ -560,10 +522,10 @@ conn.close()
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `cooldown_seconds` | 180 | 两次告警最小间隔（秒），极端行情绕过 |
-| `trend_deviation_pct` | 2.0 | 同向趋势延续：偏离上次参考价 ≥ 2% 才再推 |
-| `reversal_deviation_pct` | 1.5 | 方向反转：偏离上次参考价 ≥ 1.5% 才再推 |
+| `trend_deviation` | 0.02 | 同向趋势延续：偏离上次参考价 ≥ 2% 才再推 (小数值) |
+| `reversal_deviation` | 0.015 | 方向反转：偏离上次参考价 ≥ 1.5% 才再推 (小数值) |
 | `time_decay_seconds` | 1800 | 时间衰减：距上次告警 ≥ 30min |
-| `time_decay_deviation_pct` | 1.0 | 时间衰减：偏离 ≥ 1% |
+| `time_decay_deviation` | 0.01 | 时间衰减：偏离 ≥ 1% (小数值) |
 | `extreme_pct_threshold` | 6.0 | 极端行情阈值：≥ 此值不检查间隔和阶梯 |
 | `max_daily_normal` | 8 | 非极端告警每日上限 |
 | `max_daily_total` | 15 | 绝对每日上限（含极端） |
