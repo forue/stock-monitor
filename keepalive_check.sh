@@ -1,26 +1,25 @@
 #!/bin/bash
 set -e
 
-LOGFILE="/home/node/.openclaw/workspace/stock-monitor/logs/keepalive.log"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOGFILE="${SCRIPT_DIR}/logs/keepalive.log"
+DAEMON_STDOUT="${SCRIPT_DIR}/logs/daemon-stdout.log"
+PIDFILE="/tmp/stock-monitor.pid"
+mkdir -p "$(dirname "$LOGFILE")"
+
 echo "===== Keepalive check started at $(date) =====" >> "$LOGFILE" 2>&1
 
-# Function to log message
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOGFILE" 2>&1
 }
 
-# Check if today is weekend
-day_of_week=$(date +%u) # 1=Mon, 7=Sun
-if [ "$day_of_week" -gt 5 ]; then
-    log "Today is weekend, skip."
-    exit 0
-fi
-
-# Check if today is a holiday (MM-DD format)
-today_mmdd=$(date +%m-%d)
-holidays="01-01 01-02 02-16 02-17 02-18 02-19 02-20 02-23 04-06 05-01 05-04 05-05 06-19 09-25 10-01 10-02 10-06 10-07"
-if [[ " $holidays " == *" $today_mmdd "* ]]; then
-    log "Today is a holiday ($today_mmdd), skip."
+# Check if today is a trading day (uses lib/trading_calendar.py as single source of truth)
+if ! python3 -c "
+import sys; sys.path.insert(0, '${SCRIPT_DIR}')
+from lib.trading_calendar import is_trading_day
+exit(0 if is_trading_day() else 1)
+" 2>/dev/null; then
+    log "Today is not a trading day (weekend/holiday), skip."
     exit 0
 fi
 
@@ -33,7 +32,6 @@ fi
 
 log "Within trading hours, proceeding..."
 
-PIDFILE="/tmp/stock-monitor.pid"
 if [ -f "$PIDFILE" ]; then
     pid=$(cat "$PIDFILE")
     if [ -n "$pid" ] && ps -p "$pid" > /dev/null 2>&1; then
@@ -47,10 +45,15 @@ else
 fi
 
 # Start the daemon
-cd /home/node/.openclaw/workspace/stock-monitor
-nohup python3 monitor-daemon.py >> logs/monitor.log 2>&1 &
-echo $! > /tmp/stock-monitor.pid  # Write our own PID? Actually daemon should write its own PID. We'll wait and read back.
-# Wait 5 seconds
+cd "$SCRIPT_DIR"
+
+# 先删除可能由 shell 写入的残留 PID 文件
+rm -f "$PIDFILE"
+
+# 使用独立文件重定向 stdout/stderr，避免与 daemon 的 RotatingFileHandler 冲突
+nohup python3 monitor-daemon.py >> "$DAEMON_STDOUT" 2>&1 &
+
+# 等待 daemon 自己写入 PID（由 lib/process.py 的 check_and_write_pid 完成）
 sleep 5
 
 # Re-read PID file (daemon should have written its own PID)
@@ -61,11 +64,10 @@ if [ -f "$PIDFILE" ]; then
         exit 0
     else
         log "启动验证失败"
-        # Output last 3 lines of monitor.log
-        if [ -f "logs/monitor.log" ]; then
-            tail -3 logs/monitor.log >> "$LOGFILE" 2>&1
+        if [ -f "$DAEMON_STDOUT" ]; then
+            tail -3 "$DAEMON_STDOUT" >> "$LOGFILE" 2>&1
         else
-            log "logs/monitor.log not found"
+            log "daemon-stdout.log not found"
         fi
         exit 1
     fi

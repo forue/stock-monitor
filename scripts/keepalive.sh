@@ -7,36 +7,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PIDFILE="/tmp/stock-monitor.pid"
 SCRIPT="${SCRIPT_DIR}/monitor-daemon.py"
 LOGFILE="${SCRIPT_DIR}/logs/keepalive.log"
-MONITOR_LOG="${SCRIPT_DIR}/logs/monitor.log"
+DAEMON_STDOUT="${SCRIPT_DIR}/logs/daemon-stdout.log"
 
-mkdir -p "$(dirname "$LOGFILE")" "$(dirname "$MONITOR_LOG")"
+mkdir -p "$(dirname "$LOGFILE")"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOGFILE"; }
 
-# ---- 交易日判断 ----
-DOW=$(date +%u)   # 1=周一 … 6=周六 7=周日
-TODAY=$(date +%Y-%m-%d)
-
-# 周末直接跳过
-[ "$DOW" -ge 6 ] && { log "⏭️ 周末，跳过"; exit 0; }
-
-# 2026 年 A 股节假日列表（交易所公布）
-is_holiday() {
-    case "$1" in
-        2026-01-01|2026-01-02) ;;
-        2026-02-16|2026-02-17|2026-02-18|2026-02-19|2026-02-20|2026-02-23) ;;
-        2026-04-06) ;;
-        2026-05-01|2026-05-04|2026-05-05) ;;
-        2026-06-19) ;;
-        2026-09-25) ;;
-        2026-10-01|2026-10-02|2026-10-06|2026-10-07) ;;
-        *) return 1 ;;
-    esac
-    return 0
-}
-
-if is_holiday "$TODAY"; then
-    log "🎌 节假日休市 ($TODAY)，跳过保活"
+# ---- 交易日判断 (使用 lib/trading_calendar.py 作为唯一数据源) ----
+if ! python3 -c "
+import sys; sys.path.insert(0, '${SCRIPT_DIR}')
+from lib.trading_calendar import is_trading_day
+exit(0 if is_trading_day() else 1)
+" 2>/dev/null; then
+    log "⏭️ 非交易日 (周末/节假日)，跳过保活"
     exit 0
 fi
 
@@ -62,8 +45,8 @@ rm -f "$PIDFILE"
 
 cd "$SCRIPT_DIR"
 # daemon 自身通过 RotatingFileHandler 管理格式化日志
-# nohup 重定向作为兜底，捕获未处理的异常和 print 输出
-nohup python3 "$SCRIPT" >> "$MONITOR_LOG" 2>&1 &
+# nohup 重定向到独立文件，避免与 RotatingFileHandler 冲突
+nohup python3 "$SCRIPT" >> "$DAEMON_STDOUT" 2>&1 &
 NEW_PID=$!
 
 # 等待 daemon 完成初始化（含数据库、配置加载等）
@@ -83,7 +66,7 @@ elif [ -n "$NEW_PID" ] && ps -p "$NEW_PID" > /dev/null 2>&1; then
 else
     log "❌ 启动验证失败，进程可能已退出"
     # 输出最后几行日志便于排查
-    if [ -f "${SCRIPT_DIR}/logs/monitor.log" ]; then
-        log "📋 最近日志: $(tail -3 "${SCRIPT_DIR}/logs/monitor.log" 2>/dev/null | tr '\n' ' | ')"
+    if [ -f "${SCRIPT_DIR}/logs/daemon-stdout.log" ]; then
+        log "📋 最近日志: $(tail -3 "${SCRIPT_DIR}/logs/daemon-stdout.log" 2>/dev/null | tr '\n' ' | ')"
     fi
 fi
