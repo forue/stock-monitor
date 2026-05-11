@@ -165,9 +165,9 @@ def get_check_interval(session_name: str, volatility: float) -> int:
         return base
 
     if volatility >= 0.02:
-        return 3
-    elif volatility >= 0.01:
         return 2
+    elif volatility >= 0.01:
+        return 3
     elif volatility >= 0.005:
         return max(2, base // 2)
     else:
