@@ -10,6 +10,7 @@ __pycache__/
 # 日志
 logs/*.log
 logs/*.log.*
+logs/daemon-stdout.log
 logs/alerts.json
 logs/qq-alert-queue.jsonl
 logs/qq-alert-processed.jsonl
@@ -29,3 +30,4 @@ data/*.db-*
 # OS
 .DS_Store
 Thumbs.db
+nohup.out

@@ -13,23 +13,62 @@ from lib.logger import log
 DEFAULT_CONFIG = {
     'stocks': [],
     'l1_thresholds': {
-        'price_change_rate': 0.007,
+        'price_change_rate': 0.01,
         'price_change_pct': 2.5,
-        'volume_ratio': 4.5,
+        'volume_ratio': 2.0,
         'amplitude': 0.02,
+        'min_conditions_required': 2,
+        'min_consecutive_hits': 2,
+        'volume_ratio_by_session': {
+            'opening': 3.0, 'morning': 2.0, 'afternoon': 2.0, 'closing': 2.5,
+        },
     },
     'l2_thresholds': {
         'price_change_pct': 3.0,
-        'volume_ratio': 5.0,
+        'volume_ratio': 3.0,
+        'extreme_price_change_pct': 5.0,
+        'extreme_volume_ratio': 6.0,
+        'min_price_for_volume': 1.0,
+        'min_consecutive_hits': 2,
+        'volume_ratio_by_session': {
+            'opening': 5.0, 'morning': 3.0, 'afternoon': 3.0, 'closing': 4.0,
+        },
+    },
+    'escalation': {
+        'cooldown_seconds': 180,
+        'trend_deviation': 0.02,
+        'reversal_deviation': 0.015,
+        'time_decay_seconds': 1800,
+        'time_decay_deviation': 0.01,
+        'extreme_pct_threshold': 6.0,
+        'max_daily_normal': 8,
+        'max_daily_total': 15,
     },
     'time_strategy': {
         'intervals': {
-            'high_volatility': 2,
-            'normal': 5,
+            'high_volatility': 3,
+            'normal': 8,
             'off_hours': 300,
         }
     },
-    'notification': {'enabled': True, 'channel': 'qqbot_c2c'},
+    'tech_analysis_defaults': {
+        'enabled': False,
+        'ma_fast': 8,
+        'ma_slow': 20,
+        'ma_filter': 60,
+        'ma_filter_pct': 0.80,
+        'rsi_period': 14,
+        'rsi_max': 70,
+        'check_interval': 300,
+        'min_signal_interval': 3600,
+        'max_daily_signals': 3,
+    },
+    'notification': {
+        'enabled': True,
+        'channel': 'qqbot_c2c',
+        'min_alert_interval': 600,
+        'max_daily_alerts_per_stock': 8,
+    },
 }
 
 # 配置文件修改时间缓存

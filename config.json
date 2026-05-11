@@ -57,12 +57,12 @@
   },
 
   "escalation": {
-    "_comment": "阶梯式递增告警参数",
+    "_comment": "阶梯式递增告警参数 (偏差值为小数，如 0.02 = 2%)",
     "cooldown_seconds": 180,
-    "trend_deviation_pct": 2.0,
-    "reversal_deviation_pct": 1.5,
+    "trend_deviation": 0.02,
+    "reversal_deviation": 0.015,
     "time_decay_seconds": 1800,
-    "time_decay_deviation_pct": 1.0,
+    "time_decay_deviation": 0.01,
     "extreme_pct_threshold": 6.0,
     "max_daily_normal": 8,
     "max_daily_total": 15
@@ -95,17 +95,6 @@
     "channel": "qqbot_c2c",
     "min_alert_interval": 600,
     "max_daily_alerts_per_stock": 8
-  },
-
-  "logging": {
-    "level": "INFO",
-    "file": "/home/node/.openclaw/workspace/stock-monitor/logs/monitor.log",
-    "max_size": "10MB",
-    "backup_count": 5
-  },
-
-  "database": {
-    "type": "sqlite",
-    "path": "/home/node/.openclaw/workspace/stock-monitor/data/stock_monitor.db"
   }
+
 }
