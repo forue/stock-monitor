@@ -10,7 +10,6 @@
 
 import sqlite3
 from typing import Optional, List, Tuple
-from collections import OrderedDict
 
 from lib.logger import log
 
@@ -19,33 +18,26 @@ def get_close_history(db_path: str, stock_code: str, days: int) -> List[float]:
     """
     获取最近 N 个交易日的收盘价（每日最后一条记录）
 
-    Returns:
-        从旧到新排列的收盘价列表，数据不足返回空列表
+    使用子查询按 rowid 取每天最后一条记录，确保每个交易日恰好一行。
     """
     try:
         with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            # 取足够多的记录（每次检查都会写入，一天可能有几十条）
             cursor.execute("""
-                SELECT DATE(timestamp) AS trade_date, timestamp, current_price
+                SELECT DATE(timestamp) AS trade_date, current_price
                 FROM stock_data
                 WHERE stock_code = ?
-                ORDER BY timestamp DESC
+                AND rowid IN (
+                    SELECT MAX(rowid) FROM stock_data
+                    WHERE stock_code = ?
+                    GROUP BY DATE(timestamp)
+                )
+                ORDER BY trade_date ASC
                 LIMIT ?
-            """, (stock_code, days * 20))
+            """, (stock_code, stock_code, days))
             rows = cursor.fetchall()
 
-        # 按日期分组，取每天最后一条（timestamp 最大）
-        daily = OrderedDict()
-        for row in reversed(rows):  # reversed: oldest first for ordered dict
-            d = row['trade_date']
-            if d not in daily:
-                daily[d] = row['current_price']
-
-        prices = list(daily.values())
-        # 返回从旧到新
-        return prices[-days:] if len(prices) >= days else []
+        return [r[1] for r in rows]
 
     except Exception as e:
         log(f"获取收盘价历史失败 ({stock_code}): {e}", level="WARNING")

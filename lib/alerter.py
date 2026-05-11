@@ -315,20 +315,54 @@ from lib.indicators import (
     check_golden_cross, check_death_cross,
     get_prev_ma, save_curr_ma,
 )
-import time
 
 
 _trading_signal_state = {}
+_trading_signal_date = None
+
+MAX_TRADING_SIGNALS_PER_DAY = 3
+
+
+def _reset_daily_signal_state():
+    """跨天重置交易信号状态"""
+    global _trading_signal_date
+    today = datetime.now().date()
+    if _trading_signal_date != today:
+        _trading_signal_state.clear()
+        _trading_signal_date = today
+
 
 def _get_signal_state(stock_code):
     return _trading_signal_state.get(stock_code, {})
 
 
 def _update_signal_state(stock_code, signal_type):
+    state = _get_signal_state(stock_code)
     _trading_signal_state[stock_code] = {
+        **state,
         'last_signal': signal_type,
         'last_time': time.time(),
+        'signal_count_today': state.get('signal_count_today', 0) + 1,
     }
+
+
+def _update_check_time(stock_code):
+    state = _get_signal_state(stock_code)
+    _trading_signal_state[stock_code] = {
+        **state,
+        'last_check_time': time.time(),
+    }
+
+
+def _trading_signal_daily_ok(stock_code, config):
+    """每日交易信号上限检查"""
+    max_daily = config.get('tech_analysis_defaults', {}).get(
+        'max_daily_signals', MAX_TRADING_SIGNALS_PER_DAY)
+    count = _get_signal_state(stock_code).get('signal_count_today', 0)
+    if count >= max_daily:
+        log(f"{stock_code} 今日交易信号已达上限 ({max_daily}次)，跳过", level="DEBUG")
+        return False
+    return True
 
 
 def check_trading_signal(stock_code, current_price,
@@ -341,7 +375,11 @@ def check_trading_signal(stock_code, current_price,
         None -> 无信号
         dict  -> {'signal': 'buy'|'sell', 'reason': str, ...}
     """
-    tech = stock_config.get('tech_analysis') or config.get('tech_analysis_defaults', {})
+    _reset_daily_signal_state()
+
+    # 合并股票专属配置与全局默认值 (stock_config 即 tech_analysis 字典)
+    defaults = config.get('tech_analysis_defaults', {})
+    tech = {**defaults, **stock_config} if stock_config else defaults
     if not tech.get('enabled', False):
         return None
 
@@ -352,6 +390,13 @@ def check_trading_signal(stock_code, current_price,
     rsi_period = tech.get('rsi_period', 14)
     rsi_max = tech.get('rsi_max', 70)
     min_signal_interval = tech.get('min_signal_interval', 3600)
+    check_interval = tech.get('check_interval', 300)
+
+    # 0. 检查节流：上次计算后未满 check_interval 秒则跳过
+    state = _get_signal_state(stock_code)
+    now = time.time()
+    if state.get('last_check_time') and (now - state['last_check_time']) < check_interval:
+        return None
 
     # 1. 获取历史收盘价
     max_days = max(ma_slow_period, ma_filter_period, rsi_period + 1)
@@ -369,56 +414,71 @@ def check_trading_signal(stock_code, current_price,
     if ma_fast is None or ma_slow is None:
         return None
 
-    # 3. 获取上期 MA 值（用于判断穿越）
+    # 3. 获取上期 MA 值（save_curr_ma 在交叉判断之后调用，保证状态不被消耗）
     prev_fast, prev_slow = get_prev_ma(stock_code)
 
-    # 4. 保存本期 MA 值（供下期对比）
-    save_curr_ma(stock_code, ma_fast, ma_slow)
+    # 4. 更新本次检查时间
+    _update_check_time(stock_code)
 
-    # 5. 防重复：同类型信号 min_signal_interval 秒内不重复
-    state = _get_signal_state(stock_code)
-    now = time.time()
-    if state:
-        last_signal = state.get('last_signal')
-        last_time = state.get('last_time', 0)
-        if last_time and (now - last_time) < min_signal_interval:
-            if (last_signal == 'buy' and check_golden_cross(ma_fast, ma_slow, prev_fast, prev_slow)) or \
-               (last_signal == 'sell' and check_death_cross(ma_fast, ma_slow, prev_fast, prev_slow)):
+    # 5. 交叉检测（必须在 save_curr_ma 之前）
+    golden = check_golden_cross(ma_fast, ma_slow, prev_fast, prev_slow)
+    death = check_death_cross(ma_fast, ma_slow, prev_fast, prev_slow)
+
+    signal = None
+
+    if golden or death:
+        # 防重复：同类型信号在 min_signal_interval 秒内延后，不消耗 MA 状态
+        if state:
+            last_signal = state.get('last_signal')
+            last_time = state.get('last_time', 0)
+            if last_time and (now - last_time) < min_signal_interval:
+                if (last_signal == 'buy' and golden) or (last_signal == 'sell' and death):
+                    return None  # 延后：不保存 MA，下轮继续检测
+
+        if golden:
+            filter_ok = current_price >= (ma_filter or 0) * ma_filter_pct
+            rsi_ok = rsi is None or rsi < rsi_max
+
+            if filter_ok and rsi_ok:
+                if not _trading_signal_daily_ok(stock_code, config):
+                    save_curr_ma(stock_code, ma_fast, ma_slow)
+                    return None
+
+                _update_signal_state(stock_code, 'buy')
+                save_curr_ma(stock_code, ma_fast, ma_slow)
+                return {
+                    'signal': 'buy',
+                    'reason': '金叉',
+                    'ma_fast': ma_fast, 'ma_slow': ma_slow,
+                    'ma_filter': ma_filter, 'ma_filter_pct': ma_filter_pct,
+                    'rsi': rsi, 'rsi_max': rsi_max, 'rsi_period': rsi_period,
+                    'close': current_price,
+                }
+            else:
+                log(f"金叉触发但附加条件未满足 ({stock_code}): "
+                    f"filter={'✅' if filter_ok else '❌'}({current_price:.2f} vs {ma_filter:.2f}*{ma_filter_pct:.0%}), "
+                    f"RSI={'✅' if rsi_ok else '❌'}({rsi:.1f} vs {rsi_max})",
+                    level="DEBUG")
+                return None  # 延后：不消耗 MA 状态，条件达标后可重检
+
+        elif death:
+            if not _trading_signal_daily_ok(stock_code, config):
+                save_curr_ma(stock_code, ma_fast, ma_slow)
                 return None
 
-    # 6. 金叉判断 + 附加条件
-    if check_golden_cross(ma_fast, ma_slow, prev_fast, prev_slow):
-        filter_ok = current_price >= (ma_filter or 0) * ma_filter_pct
-        rsi_ok = rsi is None or rsi < rsi_max
-
-        if filter_ok and rsi_ok:
-            _update_signal_state(stock_code, 'buy')
+            _update_signal_state(stock_code, 'sell')
+            save_curr_ma(stock_code, ma_fast, ma_slow)
             return {
-                'signal': 'buy',
-                'reason': '金叉',
+                'signal': 'sell',
+                'reason': '死叉',
                 'ma_fast': ma_fast, 'ma_slow': ma_slow,
-                'ma_filter': ma_filter, 'ma_filter_pct': ma_filter_pct,
-                'rsi': rsi, 'rsi_max': rsi_max,
+                'ma_filter': ma_filter,
+                'rsi': rsi, 'rsi_period': rsi_period,
                 'close': current_price,
             }
-        else:
-            log(f"金叉触发但附加条件未满足 ({stock_code}): "
-                f"filter={'✅' if filter_ok else '❌'}({current_price:.2f} vs {ma_filter:.2f}*{ma_filter_pct:.0%}), "
-                f"RSI={'✅' if rsi_ok else '❌'}({rsi:.1f} vs {rsi_max})",
-                level="DEBUG")
 
-    # 7. 死叉判断（无需附加条件）
-    if check_death_cross(ma_fast, ma_slow, prev_fast, prev_slow):
-        _update_signal_state(stock_code, 'sell')
-        return {
-            'signal': 'sell',
-            'reason': '死叉',
-            'ma_fast': ma_fast, 'ma_slow': ma_slow,
-            'ma_filter': ma_filter,
-            'rsi': rsi,
-            'close': current_price,
-        }
-
+    # 无信号：保存本期 MA 供下轮交叉检测对比
+    save_curr_ma(stock_code, ma_fast, ma_slow)
     return None
 
 
@@ -434,6 +494,7 @@ def build_trading_signal_message(stock, signal):
     ma_filter = signal.get('ma_filter', 0)
     ma_filter_pct = signal.get('ma_filter_pct', 0.80)
     rsi = signal.get('rsi')
+    rsi_period = signal.get('rsi_period', 14)
     rsi_max = signal.get('rsi_max', 70)
     close = signal.get('close', 0)
 
@@ -444,14 +505,14 @@ def build_trading_signal_message(stock, signal):
         filter_ok = close >= ma_filter * ma_filter_pct
         filter_str = f'MA{int(ma_filter)}：收盘价 ¥{close:.2f} 占比 {close/ma_filter*100:.1f}%' + \
             f' {"✅" if filter_ok else "❌"} (≥{ma_filter_pct:.0%})'
-        rsi_str = f'RSI{len(str(int(rsi))) if rsi else "?"}：{rsi:.1f}' + \
+        rsi_str = f'RSI{rsi_period}：{rsi:.1f}' + \
             f' {"✅" if rsi and rsi < rsi_max else "❌"} (<{rsi_max})'
     else:
         header = '🔻 【卖出信号】技术面死叉'
         icon = '📉'
         reason_str = f'死叉：MA{int(ma_fast)} 下穿 MA{int(ma_slow)} ⚠️'
         filter_str = f'MA{int(ma_filter)}：收盘价 ¥{close:.2f}'
-        rsi_str = f'RSI{len(str(int(rsi))) if rsi else "?"}：{rsi:.1f}' if rsi else 'RSI：N/A'
+        rsi_str = f'RSI{rsi_period}：{rsi:.1f}' if rsi else 'RSI：N/A'
 
     from datetime import datetime
     time_str = datetime.now().strftime('%H:%M:%S')

@@ -152,12 +152,14 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
     state = _get_state(stock_code)
     now = time.time()
     abs_pct = abs(change_pct)
-    config = escalation_config or {}
+    esc = escalation_config or {}
 
-    max_daily = notif.get('max_daily_alerts_per_stock', MAX_DAILY_NORMAL)
+    max_daily = esc.get('max_daily_normal', notif.get('max_daily_alerts_per_stock', MAX_DAILY_NORMAL))
+    max_total = esc.get('max_daily_total', MAX_DAILY_TOTAL)
     min_interval = notif.get('min_alert_interval', 600)
+    extreme_pct = esc.get('extreme_pct_threshold', EXTREME_PCT_THRESHOLD)
 
-    is_extreme = abs_pct >= EXTREME_PCT_THRESHOLD
+    is_extreme = abs_pct >= extreme_pct
     current_dir = "up" if change_pct > 0 else "down"
 
     # 第一次告警：直接允许
@@ -169,7 +171,7 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
     elapsed = now - last_time
 
     # 动态冷却：波动率越高冷却越长
-    base_cooldown = config.get('cooldown_seconds', COOLDOWN_SECONDS)
+    base_cooldown = esc.get('cooldown_seconds', COOLDOWN_SECONDS)
     if volatility is not None and volatility > 0:
         multiplier = max(0.5, min(3.0, volatility * 100))
         cooldown = int(base_cooldown * multiplier)
@@ -187,8 +189,8 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
 
     # 极端行情强制通道：不检查阶梯，不计入非极端上限
     if is_extreme:
-        if count_today >= MAX_DAILY_TOTAL:
-            log(f"{stock_name} 今日已达绝对上限 ({MAX_DAILY_TOTAL}次)，跳过")
+        if count_today >= max_total:
+            log(f"{stock_name} 今日已达绝对上限 ({max_total}次)，跳过")
             return None
         return "extreme"
 
@@ -203,19 +205,24 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
     if not last_price or not last_dir:
         return "first"
 
+    trend_dev = esc.get('trend_deviation', TREND_DEVIATION)
+    reversal_dev = esc.get('reversal_deviation', REVERSAL_DEVIATION)
+    decay_secs = esc.get('time_decay_seconds', TIME_DECAY_SECONDS)
+    decay_dev = esc.get('time_decay_deviation', TIME_DECAY_DEVIATION)
+
     deviation = (current_price - last_price) / last_price
     abs_deviation = abs(deviation)
 
-    # 趋势延续：同向 + 偏离 ≥ 2%
-    if current_dir == last_dir and abs_deviation >= TREND_DEVIATION:
+    # 趋势延续：同向 + 偏离达标
+    if current_dir == last_dir and abs_deviation >= trend_dev:
         return "trend_continue_up" if current_dir == "up" else "trend_continue_down"
 
-    # 方向反转：反向 + 偏离 ≥ 1.5%
-    if current_dir != last_dir and abs_deviation >= REVERSAL_DEVIATION:
+    # 方向反转：反向 + 偏离达标
+    if current_dir != last_dir and abs_deviation >= reversal_dev:
         return "rebound" if current_dir == "up" else "pullback"
 
-    # 时间衰减：≥ 30 分钟 + 偏离 ≥ 1%
-    if elapsed >= TIME_DECAY_SECONDS and abs_deviation >= TIME_DECAY_DEVIATION:
+    # 时间衰减：超时 + 偏离达标
+    if elapsed >= decay_secs and abs_deviation >= decay_dev:
         return "time_decay"
 
     log(f"{stock_name} 未达阶梯条件 (偏离{abs_deviation:.2%}, 同向={current_dir==last_dir})")
@@ -327,7 +334,7 @@ def _write_alert_file(stock_code: str, stock_name: str, current_price: float,
         'stock_name': stock_name,
         'current_price': current_price,
         'change_pct': change_pct,
-        'volume_ratio': metrics.get('volume_ratio'),
+        'volume_ratio': metrics.get('volume_ratio') if metrics else None,
         'message': message,
         'channel': 'qqbot_c2c',
         'status': 'pending',
@@ -378,25 +385,7 @@ def send_trading_signal(stock: dict, signal: dict, config: dict,
 
     success = False
     if all([app_id, client_secret, user_openid]):
-        token = qq_get_access_token(app_id, client_secret)
-        if token:
-            url = f"https://api.sgroup.qq.com/v2/users/{user_openid}/messages"
-            payload = {"content": message, "msg_type": 0}
-            try:
-                resp = requests.post(url, json=payload, headers={
-                    'Authorization': f'QQBot {token}',
-                    'Content-Type': 'application/json',
-                    'X-Union-Appid': app_id,
-                }, timeout=10)
-                if resp.status_code < 400:
-                    result = resp.json()
-                    msg_id = result.get('id', '')
-                    log(f"QQ C2C 交易信号发送成功！msg_id={msg_id}")
-                    success = True
-                else:
-                    log(f"QQ C2C 推送失败 HTTP {resp.status_code}: {resp.text[:500]}", level="ERROR")
-            except Exception as e:
-                log(f"QQ C2C 消息发送异常：{e}", level="ERROR")
+        success = qq_send_c2c_message(app_id, client_secret, user_openid, message)
     else:
         log("QQ 推送配置不完整，退化为写文件", level="ERROR")
 
@@ -405,8 +394,7 @@ def send_trading_signal(stock: dict, signal: dict, config: dict,
         _write_alert_file(
             stock_code, stock_name,
             signal.get('close', 0),
-            signal.get('close', 0),
-            None, message, base_dir, alerts_file
+            None, None, message, base_dir, alerts_file
         )
 
     return success
