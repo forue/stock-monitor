@@ -2,6 +2,9 @@
 # 股票监控保活脚本 — 仅 A 股交易日 + 交易时段才执行
 # 被 cron 每 30 分钟调用
 
+# ---- 时区：强制使用 Asia/Shanghai，避免 cron 环境默认 UTC 导致时段判断错误 ----
+export TZ=Asia/Shanghai
+
 # ---- 路径配置（自动适配，与 daemon 保持一致）----
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PIDFILE="/tmp/stock-monitor.pid"
