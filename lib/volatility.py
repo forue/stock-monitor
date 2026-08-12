@@ -4,10 +4,29 @@
 波动率计算模块 - 价格波动率/涨跌幅/振幅/量比
 """
 
+from datetime import date
 from pathlib import Path
 
 from lib.logger import log
 from lib.trading_calendar import get_trading_elapsed_ratio
+
+
+# 日均量缓存：同一交易日内仅首次计算时查询 DB，之后直接命中内存
+# 均量只随"交易日推进"变化（新的一天计入、旧的一天剔除），日内不变化，可安全按天缓存
+_avg_volume_cache = {}
+
+
+def _get_daily_avg_volume(stock_code: str, db_path: Path) -> float:
+    """获取历史日均量（按天缓存，避免每轮主循环重复打开数据库连接）"""
+    today = str(date.today())
+    cached = _avg_volume_cache.get(stock_code)
+    if cached and cached.get('date') == today:
+        return cached.get('avg', 0)
+
+    from lib.database import get_avg_volume_from_db
+    avg_volume = get_avg_volume_from_db(db_path, stock_code)
+    _avg_volume_cache[stock_code] = {'date': today, 'avg': avg_volume}
+    return avg_volume
 
 
 def calculate_volatility(stock_data: dict, historical_data: list = None,
@@ -66,8 +85,7 @@ def calculate_volatility(stock_data: dict, historical_data: list = None,
                 avg_volume = avg_vol
 
         if avg_volume <= 0 and db_path:
-            from lib.database import get_avg_volume_from_db
-            avg_volume = get_avg_volume_from_db(db_path, stock_code)
+            avg_volume = _get_daily_avg_volume(stock_code, db_path)
 
         if avg_volume > 0:
             elapsed_ratio = get_trading_elapsed_ratio()

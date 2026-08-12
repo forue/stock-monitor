@@ -63,7 +63,11 @@ def init_database(db_path: Path):
 
 
 def get_avg_volume_from_db(db_path: Path, stock_code: str, days: int = 5) -> float:
-    """从数据库查询历史日均成交量（按天聚合，使用北京时间）"""
+    """从数据库查询历史日均成交量（按天聚合，使用北京时间）
+
+    排除当日数据（当日为未完成成交量），只统计完整历史交易日的日均值，
+    因此该值在一个交易日内保持稳定，可安全按天缓存。
+    """
     try:
         with sqlite3.connect(str(db_path)) as conn:
             cursor = conn.cursor()
@@ -72,6 +76,7 @@ def get_avg_volume_from_db(db_path: Path, stock_code: str, days: int = 5) -> flo
                 FROM stock_data
                 WHERE stock_code = ? AND volume IS NOT NULL
                     AND timestamp >= datetime('now', 'localtime', ?)
+                    AND DATE(timestamp) < DATE('now', 'localtime')
                 GROUP BY DATE(timestamp)
                 ORDER BY trade_date DESC
                 LIMIT ?
