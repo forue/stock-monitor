@@ -21,7 +21,10 @@
     {"code": "600028", "name": "中国石化", "enabled": true},
     {"code": "002736", "name": "国信证券", "enabled": true},
     {"code": "601890", "name": "亚星锚链", "enabled": true},
-    {"code": "600150", "name": "中国船舶", "enabled": true}
+    {"code": "600150", "name": "中国船舶", "enabled": true},
+    {"code": "001270", "name": "铖昌科技", "enabled": true},
+    {"code": "603738", "name": "泰晶科技", "enabled": true},
+    {"code": "603773", "name": "沃格光电", "enabled": true}
   ],
 
   "l1_thresholds": {
@@ -95,6 +98,29 @@
     "channel": "qqbot_c2c",
     "min_alert_interval": 600,
     "max_daily_alerts_per_stock": 8
+  },
+
+  "real_time_features": {
+    "_comment": "实盘辅助功能：主力资金流 / 五档盘口 / 量价背离。默认关闭，需开启 enabled 才发起对应请求（保护免费源频控）",
+    "fund_flow": {
+      "enabled": false,
+      "check_interval": 300,
+      "net_inflow_th": 1000000,
+      "net_outflow_th": -1000000,
+      "ratio_th": 0.05
+    },
+    "order_book": {
+      "enabled": false,
+      "check_interval": 120,
+      "vi_ratio_high": 0.6,
+      "vi_ratio_low": -0.6,
+      "seal_qty_th": 50000
+    },
+    "divergence": {
+      "enabled": false,
+      "check_interval": 300,
+      "window": 5
+    }
   }
 
 }

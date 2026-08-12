@@ -340,3 +340,150 @@ def fetch_free_data(stock_code: str) -> Optional[dict]:
 
     log(f"所有免费数据源均失败 ({stock_code})", level="ERROR")
     return None
+
+
+# ============ 主力资金流向 (东方财富) ============
+
+def fetch_fund_flow(stock_code: str) -> Optional[dict]:
+    """
+    获取主力资金流向（东方财富实时资金流接口）
+
+    仅取最近一根 1 分钟 K 线的资金净额（单位: 元）。
+    字段：f51=时间, f52=主力净流入(元), f53=小单, f54=中单, f55=大单, f56=超大单
+    正值=净流入，负值=净流出。
+
+    Returns:
+        dict 或 None（接口失败/数据不可用时）
+    """
+    market = '1' if stock_code.startswith('6') else '0'
+    secid = f"{market}.{stock_code}"
+    url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
+    params = {
+        'lmt': '1', 'klt': '1', 'secid': secid,
+        'fields1': 'f1,f2,f3,f7',
+        'fields2': 'f51,f52,f53,f54,f55,f56',
+    }
+
+    try:
+        resp = request_with_retry('GET', url, params=params, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://quote.eastmoney.com/',
+        })
+        if not resp:
+            return None
+
+        result = resp.json()
+        data = result.get('data')
+        klines = (data or {}).get('klines') or []
+        if not klines:
+            log(f"资金流数据为空 ({stock_code})", level="WARNING")
+            return None
+
+        fields = klines[-1].split(',')
+        if len(fields) < 6:
+            log(f"资金流字段不足 ({stock_code})", level="WARNING")
+            return None
+
+        def _f(idx):
+            try:
+                return float(fields[idx])
+            except (ValueError, IndexError):
+                return None
+
+        main_net = _f(1)
+        super_net = _f(5)
+        large_net = _f(4)
+
+        return {
+            'code': stock_code,
+            'main_net': main_net,          # 主力净流入(元)
+            'super_net': super_net,        # 超大单净流入(元)
+            'large_net': large_net,        # 大单净流入(元)
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'source': 'eastmoney_fflow',
+        }
+    except Exception as e:
+        log(f"获取主力资金流失败 ({stock_code}): {e}", level="ERROR")
+        return None
+
+
+# ============ 五档盘口 (腾讯) ============
+
+def fetch_order_book(stock_code: str) -> Optional[dict]:
+    """
+    获取买卖五档盘口（腾讯行情接口）
+
+    ~ 分割字段索引（已验证 88 字段）：
+      3=现价, 4=昨收
+      9/10   买一价/量(手)  11/12 买二价/量  13/14 买三价/量
+      15/16  买四价/量      17/18 买五价/量
+      19/20  卖一价/量      21/22 卖二价/量  23/24 卖三价/量
+      25/26  卖四价/量      27/28 卖五价/量
+      47=涨停价, 48=跌停价, 50=委差, 51=当日均价
+
+    Returns:
+        dict 或 None
+    """
+    prefix = 'sh' if stock_code.startswith('6') else 'sz'
+    url = f"https://qt.gtimg.cn/q={prefix}{stock_code}"
+
+    try:
+        resp = request_with_retry('GET', url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        if not resp:
+            return None
+
+        resp.encoding = 'gbk'
+        text = resp.text
+        if not text or '~' not in text:
+            return None
+
+        parts = text.split('~')
+        if len(parts) < 82:
+            return None
+
+        def _f(idx):
+            try:
+                val = parts[idx].strip()
+                if not val:
+                    return None
+                return float(val)
+            except (ValueError, IndexError):
+                return None
+
+        def _parse_level(price_idx, qty_idx):
+            price = _f(price_idx)
+            qty = _f(qty_idx)  # 手
+            return (price, qty)
+
+        bids = [_parse_level(9, 10), _parse_level(11, 12), _parse_level(13, 14),
+                _parse_level(15, 16), _parse_level(17, 18)]
+        asks = [_parse_level(19, 20), _parse_level(21, 22), _parse_level(23, 24),
+                _parse_level(25, 26), _parse_level(27, 28)]
+
+        bid_total = sum(q for _, q in bids if q is not None)
+        ask_total = sum(q for _, q in asks if q is not None)
+
+        # 委比 = (买盘-卖盘)/(买盘+卖盘)，范围 -1 ~ 1
+        vi_ratio = None
+        if (bid_total + ask_total) > 0:
+            vi_ratio = (bid_total - ask_total) / (bid_total + ask_total)
+
+        return {
+            'code': stock_code,
+            'bids': bids,
+            'asks': asks,
+            'bid_total': bid_total,
+            'ask_total': ask_total,
+            'vi_ratio': vi_ratio,
+            'limit_up': _f(47),
+            'limit_down': _f(48),
+            'current_price': _f(3),
+            'close_price': _f(4),
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'source': 'tencent_orderbook',
+        }
+    except Exception as e:
+        log(f"获取五档盘口失败 ({stock_code}): {e}", level="ERROR")
+        return None

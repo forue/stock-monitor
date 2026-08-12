@@ -42,10 +42,13 @@ sys.path.insert(0, str(BASE_DIR))
 from lib.logger import init_logger, log
 from lib.config import load_config, reload_config_if_changed, init_config_mtime, load_env_file
 from lib.trading_calendar import is_trading_session, get_check_interval
-from lib.data_fetcher import fetch_free_data
+from lib.data_fetcher import fetch_free_data, fetch_fund_flow, fetch_order_book
 from lib.volatility import calculate_volatility
-from lib.alerter import should_trigger_l1, confirm_alert, reset_stock_tracker, check_trading_signal
-from lib.notifier import send_alert, send_trading_signal
+from lib.alerter import (should_trigger_l1, confirm_alert, reset_stock_tracker,
+                         check_trading_signal, check_fund_flow_signal,
+                         check_order_book_signal, check_divergence_signal)
+from lib.notifier import (send_alert, send_trading_signal, send_feature_alert)
+from lib.indicators import get_price_volume_history, calc_rsi
 from lib.database import init_database, cleanup_old_data, DBWriter
 import lib.process as process_mod
 from lib.process import (check_and_write_pid, cleanup_pid,
@@ -171,6 +174,61 @@ def main():
                             log(f"🔔 {stock_name} {signal['reason']}信号：MA{signal['ma_fast']}/MA{signal['ma_slow']}")
                             send_trading_signal(stock, signal, config,
                                                BASE_DIR, ALERTS_FILE)
+
+                    # ============ 实盘辅助功能（各自独立，失败不阻断） ============
+                    rt = config.get('real_time_features', {})
+
+                    # 功能一：主力资金流向
+                    try:
+                        ff_cfg = rt.get('fund_flow', {})
+                        if ff_cfg.get('enabled', False):
+                            fund_flow = fetch_fund_flow(stock_code)
+                            if fund_flow:
+                                ff_signal = check_fund_flow_signal(
+                                    stock_code, fund_flow, metrics, ff_cfg)
+                                if ff_signal:
+                                    log(f"💰 {stock_name} 资金信号：{ff_signal['reason']}")
+                                    send_feature_alert(stock, ff_signal, config,
+                                                       BASE_DIR, ALERTS_FILE)
+                    except Exception as e:
+                        log(f"主力资金流功能异常 ({stock_name}): {e}", level="ERROR")
+
+                    # 功能二：五档盘口
+                    try:
+                        ob_cfg = rt.get('order_book', {})
+                        if ob_cfg.get('enabled', False):
+                            order_book = fetch_order_book(stock_code)
+                            if order_book:
+                                ob_signal = check_order_book_signal(
+                                    stock_code, order_book, ob_cfg)
+                                if ob_signal:
+                                    log(f"🛒 {stock_name} 盘口信号：{ob_signal['reason']}")
+                                    send_feature_alert(stock, ob_signal, config,
+                                                       BASE_DIR, ALERTS_FILE)
+                    except Exception as e:
+                        log(f"五档盘口功能异常 ({stock_name}): {e}", level="ERROR")
+
+                    # 功能八：量价背离
+                    try:
+                        dv_cfg = rt.get('divergence', {})
+                        if dv_cfg.get('enabled', False):
+                            hist = get_price_volume_history(DB_FILE, stock_code,
+                                                            dv_cfg.get('window', 5) + 6)
+                            if hist:
+                                # 可选 RSI 辅助判断
+                                rsi = None
+                                dv_rsi_cfg = stock.get('tech_analysis', {})
+                                closes = [h['price'] for h in hist]
+                                if dv_rsi_cfg.get('enabled', False):
+                                    rsi = calc_rsi(closes, dv_rsi_cfg.get('rsi_period', 14))
+                                dv_signal = check_divergence_signal(
+                                    stock_code, hist, dv_cfg, rsi)
+                                if dv_signal:
+                                    log(f"🔀 {stock_name} 背离信号：{dv_signal['reason']}")
+                                    send_feature_alert(stock, dv_signal, config,
+                                                       BASE_DIR, ALERTS_FILE)
+                    except Exception as e:
+                        log(f"量价背离功能异常 ({stock_name}): {e}", level="ERROR")
 
                 # 3. 提交本轮写入
                 db_writer.flush()

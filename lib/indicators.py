@@ -111,3 +111,89 @@ def save_curr_ma(stock_code: str, ma_fast: float, ma_slow: float):
         'ma_fast': ma_fast,
         'ma_slow': ma_slow,
     }
+
+
+# ============ 量价历史查询与背离检测 ============
+
+def get_price_volume_history(db_path: str, stock_code: str, days: int) -> List[dict]:
+    """
+    获取最近 N 个交易日的 (收盘价, 成交量)，每日取最后一条记录
+
+    Returns:
+        [{'date': 'YYYY-MM-DD', 'price': float, 'volume': float}, ...] 按日期升序
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DATE(timestamp) AS trade_date, current_price, volume
+                FROM stock_data
+                WHERE stock_code = ?
+                AND volume IS NOT NULL
+                AND rowid IN (
+                    SELECT MAX(rowid) FROM stock_data
+                    WHERE stock_code = ?
+                    GROUP BY DATE(timestamp)
+                )
+                ORDER BY trade_date ASC
+                LIMIT ?
+            """, (stock_code, stock_code, days))
+            rows = cursor.fetchall()
+
+        return [{'date': r[0], 'price': r[1], 'volume': r[2]} for r in rows]
+    except Exception as e:
+        log(f"获取量价历史失败 ({stock_code}): {e}", level="WARNING")
+        return []
+
+
+def detect_divergence(history: List[dict], rsi: Optional[float] = None,
+                      rsi_max: float = 70, rsi_min: float = 30,
+                      window: int = 5) -> Optional[dict]:
+    """
+    检测量价背离（顶背离 / 底背离）
+
+    基于最近 window 个交易日：
+    - 顶背离：价格段最高点创新高，但同期成交量峰值未创新高
+    - 底背离：价格段最低点创新低，但同期成交量峰值未创新低
+
+    Args:
+        history: get_price_volume_history 的返回，需足够长度
+        rsi: 可选，若提供则结合 RSI 判断（顶背离要求 RSI < rsi_max，底背离要求 RSI > rsi_min）
+        window: 背离观察窗口（交易日数）
+
+    Returns:
+        None 或 {'type': 'top'|'bottom', 'strength': float}，strength 0~1 表示背离强度
+    """
+    if history is None or len(history) < window + 2:
+        return None
+
+    prices = [h['price'] for h in history]
+    volumes = [h['volume'] or 0 for h in history]
+
+    recent = prices[-window:]
+    prior_max_price = max(prices[:-window])
+    prior_max_vol = max(volumes[:-window])
+
+    cur_max_price = max(recent)
+    cur_max_vol = max(volumes[-window:])
+
+    # 顶背离：价格创新高，量能未创新高
+    if cur_max_price > prior_max_price and cur_max_vol < prior_max_vol:
+        # RSI 过滤：顶背离发生在超买回落阶段更有意义
+        if rsi is not None and rsi >= rsi_max:
+            strength = 1.0 - min(0.9, cur_max_vol / prior_max_vol) if prior_max_vol > 0 else 0.5
+            return {'type': 'top', 'strength': max(0.1, strength)}
+        elif rsi is None:
+            strength = 1.0 - min(0.9, cur_max_vol / prior_max_vol) if prior_max_vol > 0 else 0.5
+            return {'type': 'top', 'strength': max(0.1, strength)}
+
+    # 底背离：价格创新低，量能未创新低
+    cur_min_price = min(recent)
+    if cur_min_price < min(prices[:-window]):
+        # 量能条件：当前段量能不低于前段低谷（量能回升）
+        if cur_max_vol > min(volumes[:-window]):
+            if rsi is None or rsi <= rsi_min:
+                strength = 1.0 - min(0.9, cur_min_price / min(prices[:-window])) if min(prices[:-window]) > 0 else 0.5
+                return {'type': 'bottom', 'strength': max(0.1, strength)}
+
+    return None

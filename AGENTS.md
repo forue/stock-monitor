@@ -63,7 +63,8 @@ Entry point: `monitor-daemon.py` → main loop:
    c. L1 trigger: `lib/alerter.py:should_trigger_l1()` (≥2 conditions + consecutive hits)
    d. L2 confirm: `lib/alerter.py:confirm_alert()` (volume-price combo / extreme moves)
    e. Technical signals: `lib/alerter.py:check_trading_signal()` (MA cross / RSI)
-   f. Send alerts: `lib/notifier.py:send_alert()` or `send_trading_signal()`
+   f. Real-time features: `fund_flow` / `order_book` / `divergence` (each via `config.real_time_features`, discrete `enabled` switch, failure does NOT block loop)
+   g. Send alerts: `lib/notifier.py:send_alert()` / `send_trading_signal()` / `send_feature_alert()`
 4. Dynamic sleep: `lib/trading_calendar.py:get_check_interval()`
 
 ## Module Map#
@@ -71,14 +72,16 @@ Entry point: `monitor-daemon.py` → main loop:
 | File | Purpose |
 |------|----------|
 | `lib/config.py` | Load config + `.env` reader (`load_env_file()`) |
-| `lib/indicators.py` | **NEW** MA/RSI calc, golden/death cross detection |
-| `lib/alerter.py` | L1/L2 triggers + 9 scenario classifications + **NEW** `check_trading_signal()` + `build_trading_signal_message()` |
-| `lib/notifier.py` | Staircase escalation alerts + **NEW** `send_trading_signal()` |
+| `lib/indicators.py` | **NEW** MA/RSI calc, golden/death cross detection, `detect_divergence()` (top/bottom divergence) |
+| `lib/alerter.py` | L1/L2 triggers + 9 scenario classifications + `check_trading_signal()` + real-time checks: `check_fund_flow_signal()` / `check_order_book_signal()` / `check_divergence_signal()` |
+| `lib/notifier.py` | Staircase escalation alerts + `send_trading_signal()` + `send_feature_alert()` (real-time alert unified entry) |
 | `lib/volatility.py` | Price change rate, amplitude, volume ratio |
-| `lib/data_fetcher.py` | Multi-source: qt.gtimg.cn → push2.eastmoney → hq.sina → hq.sina (fallback) |
+| `lib/data_fetcher.py` | Multi-source: qt.gtimg.cn → push2.eastmoney → hq.sina → hq.sina (fallback); + `fetch_fund_flow()` (EastMoney) + `fetch_order_book()` (Tencent 5-level) |
 | `lib/trading_calendar.py` | A-share calendar, session detection, dynamic intervals |
 | `lib/database.py` | SQLite ops, 30-day cleanup, `get_close_history()` for MA |
 | `lib/process.py` | PID lock, signal handlers, interruptible sleep |
+
+Real-time features are single-stock SERIAL requests (free sources rate-limit/bann parallel bulk). Default `enabled:false` — see `docs/FEATURES.md`.
 
 ## Testing#
 

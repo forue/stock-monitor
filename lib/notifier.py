@@ -399,3 +399,56 @@ def send_trading_signal(stock: dict, signal: dict, config: dict,
 
     return success
 
+
+# ============ 实盘辅助功能推送（统一入口） ============
+
+def send_feature_alert(stock: dict, signal: dict, config: dict,
+                       base_dir: Path = None, alerts_file: Path = None) -> bool:
+    """
+    推送实盘辅助功能告警（主力资金流 / 五档盘口 / 量价背离）
+
+    依据 signal['msg_type'] 选择对应的消息构建函数，走 QQ 推送 + 文件兜底。
+    """
+    from lib.alerter import (
+        build_fund_flow_message,
+        build_order_book_message,
+        build_divergence_message,
+    )
+
+    stock_code = stock.get('code', 'UNKNOWN')
+    stock_name = stock.get('name', stock_code)
+    msg_type = signal.get('msg_type', '')
+
+    builders = {
+        'fund_flow':   build_fund_flow_message,
+        'order_book':  build_order_book_message,
+        'divergence':  build_divergence_message,
+    }
+    builder = builders.get(msg_type)
+    if not builder:
+        log(f"未知实盘告警类型: {msg_type}", level="WARNING")
+        return False
+
+    message = builder(stock, signal)
+    log(f"准备推送实盘告警 [{msg_type}/{signal.get('signal')}]：{stock_name} {signal.get('reason', '')}")
+
+    notif = config.get('notification', {})
+    app_id = os.environ.get('QQ_APP_ID') or notif.get('qq_app_id', '')
+    client_secret = os.environ.get('QQ_CLIENT_SECRET') or notif.get('qq_client_secret', '')
+    user_openid = os.environ.get('QQ_USER_OPENID') or notif.get('user_openid', '')
+
+    success = False
+    if all([app_id, client_secret, user_openid]):
+        success = qq_send_c2c_message(app_id, client_secret, user_openid, message)
+    else:
+        log("QQ 推送配置不完整，退化为写文件", level="ERROR")
+
+    if base_dir and alerts_file:
+        _write_alert_file(
+            stock_code, stock_name,
+            signal.get('current_price', 0),
+            None, None, message, base_dir, alerts_file
+        )
+
+    return success
+

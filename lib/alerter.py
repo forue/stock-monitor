@@ -314,6 +314,7 @@ from lib.indicators import (
     get_close_history, calc_ma, calc_rsi,
     check_golden_cross, check_death_cross,
     get_prev_ma, save_curr_ma,
+    get_price_volume_history, detect_divergence,
 )
 
 
@@ -526,7 +527,323 @@ def build_trading_signal_message(stock, signal):
 📉 {rsi_str}
 ⏰ 时间：{time_str}
 
-请关注{'买入机会' if signal_type == 'buy' else '卖出时机'}！{'📈' if signal_type == 'buy' else '🔻'}
+    请关注{'买入机会' if signal_type == 'buy' else '卖出时机'}！{'📈' if signal_type == 'buy' else '🔻'}
 """
     return message
+
+
+# ============ 实盘辅助功能：主力资金流 / 五档盘口 / 量价背离 ============
+
+_fund_flow_state = {}
+_order_book_state = {}
+_divergence_state = {}
+_rt_daily_date = None
+
+
+def _reset_rt_daily_state():
+    """跨天重置实盘辅助功能状态"""
+    global _rt_daily_date
+    today = datetime.now().date()
+    if _rt_daily_date != today:
+        _fund_flow_state.clear()
+        _order_book_state.clear()
+        _divergence_state.clear()
+        _rt_daily_date = today
+
+
+def _rt_throttled(state: dict, check_interval: int, now: float = None) -> bool:
+    """节流判断：距上次检查不足 check_interval 秒则跳过"""
+    if now is None:
+        now = time.time()
+    last = state.get('last_check')
+    if last and (now - last) < check_interval:
+        return True
+    return False
+
+
+def _gen_state(stock_code, last_signal):
+    """生成状态变更记录"""
+    return {
+        'last_signal': last_signal,
+        'last_time': time.time(),
+    }
+
+
+# ---------- 功能一：主力资金流向 ----------
+
+def check_fund_flow_signal(stock_code, fund_flow: dict, metrics: dict,
+                           feature_cfg: dict) -> Optional[dict]:
+    """
+    主力资金流向 → 资金信号
+
+    Returns:
+        None 或 {'signal': str, 'reason': str, 'msg_type': 'fund_flow', ...}
+    """
+    _reset_rt_daily_state()
+    if not fund_flow or 'main_net' not in fund_flow:
+        return None
+
+    cfg = feature_cfg or {}
+    check_interval = cfg.get('check_interval', 300)
+    net_inflow_th = cfg.get('net_inflow_th', 1_000_000)
+    net_outflow_th = cfg.get('net_outflow_th', -1_000_000)
+    ratio_th = cfg.get('ratio_th', 0.05)
+
+    state = _fund_flow_state.get(stock_code, {})
+    if _rt_throttled(state, check_interval):
+        return None
+
+    main_net = fund_flow['main_net']
+    if main_net is None:
+        return None
+
+    pct = metrics.get('price_change_pct', 0) if metrics else 0
+    signal = None
+    reason = None
+
+    try:
+        # 主力净流入占比（相对价格粗估，仅用于说明）
+        if main_net >= net_inflow_th and pct > 0:
+            signal = 'fund_inflow_bull'
+            reason = f"主力净流入 {main_net/10000:.0f}万元，价格同步上涨，资金看多"
+        elif main_net <= net_outflow_th and pct < 0:
+            signal = 'fund_outflow_bear'
+            reason = f"主力净流出 {abs(main_net)/10000:.0f}万元，价格下跌，资金看空"
+        elif main_net <= net_outflow_th and pct > 0:
+            signal = 'fund_divergence_top'
+            reason = f"价格上涨但主力净流出 {abs(main_net)/10000:.0f}万元，量价背离（诱多警示）"
+        elif main_net >= net_inflow_th and pct < 0:
+            signal = 'fund_divergence_bottom'
+            reason = f"价格下跌但主力净流入 {main_net/10000:.0f}万元，资金抄底（逆势吸筹）"
+    except Exception as e:
+        log(f"资金流判断异常 ({stock_code}): {e}", level="WARNING")
+        return None
+
+    if signal is None:
+        _fund_flow_state[stock_code] = {**state, 'last_check': time.time()}
+        return None
+
+    # 同信号节流：避免连续重复推送
+    if state.get('last_signal') == signal and \
+            (state.get('last_time', 0) and (time.time() - state['last_time']) < check_interval):
+        return None
+
+    _fund_flow_state[stock_code] = {
+        **state,
+        'last_signal': signal,
+        'last_time': time.time(),
+        'last_check': time.time(),
+    }
+
+    return {
+        'msg_type': 'fund_flow',
+        'signal': signal,
+        'reason': reason,
+        'main_net': main_net,
+        'super_net': fund_flow.get('super_net'),
+        'large_net': fund_flow.get('large_net'),
+    }
+
+
+def build_fund_flow_message(stock, signal: dict) -> str:
+    """构建主力资金流向推送消息"""
+    stock_code = stock.get('code', 'UNKNOWN')
+    stock_name = stock.get('name', stock_code)
+    signal_type = signal.get('signal', '')
+
+    meta = {
+        'fund_inflow_bull':      ('🟢', '主力吸筹', '资金看多'),
+        'fund_outflow_bear':     ('🔴', '主力出货', '资金看空'),
+        'fund_divergence_top':   ('⚠️', '量价背离·诱多', '价格涨但资金流出'),
+        'fund_divergence_bottom':('🟡', '量价背离·吸筹', '价格跌但资金流入'),
+    }.get(signal_type, ('📊', '资金异动', ''))
+
+    icon, label, desc = meta
+    main_net = signal.get('main_net', 0)
+    super_net = signal.get('super_net') or 0
+    large_net = signal.get('large_net') or 0
+
+    time_str = datetime.now().strftime('%H:%M:%S')
+    return f"""{icon} 【{label}】{desc}
+
+📊 {stock_name} ({stock_code})
+💰 主力净流入：{main_net/10000:+.0f}万元
+🧩 超大单净流入：{super_net/10000:+.0f}万元
+🧩 大单净流入：{large_net/10000:+.0f}万元
+🔍 {signal.get('reason', '')}
+⏰ 时间：{time_str}
+
+请结合盘面判断！{icon}"""
+
+
+# ---------- 功能二：五档盘口 ----------
+
+def check_order_book_signal(stock_code, order_book: dict,
+                            feature_cfg: dict) -> Optional[dict]:
+    """
+    五档盘口 → 盘口信号（委比失衡 / 封板 / 巨量封单）
+
+    Returns:
+        None 或 {'signal': str, 'reason': str, 'msg_type': 'order_book', ...}
+    """
+    _reset_rt_daily_state()
+    if not order_book:
+        return None
+
+    cfg = feature_cfg or {}
+    check_interval = cfg.get('check_interval', 120)
+    vi_high = cfg.get('vi_ratio_high', 0.6)
+    vi_low = cfg.get('vi_ratio_low', -0.6)
+    seal_hand_th = cfg.get('seal_qty_th', 50000)  # 封单量阈值(手)
+
+    state = _order_book_state.get(stock_code, {})
+    if _rt_throttled(state, check_interval):
+        return None
+
+    vi_ratio = order_book.get('vi_ratio')
+    bid_total = order_book.get('bid_total', 0)
+    ask_total = order_book.get('ask_total', 0)
+    current_price = order_book.get('current_price')
+    limit_up = order_book.get('limit_up')
+    bids = order_book.get('bids') or []
+    asks = order_book.get('asks') or []
+
+    signal = None
+    reason = None
+
+    # 封板/炸板检测：现价触及涨停价 且 卖一量为 0（无卖盘=封死）
+    at_limit = (current_price is not None and limit_up and
+                abs(current_price - limit_up) < 1e-6)
+    if at_limit:
+        ask1_qty = asks[0][1] if asks and asks[0] else 0
+        if ask1_qty is not None and ask1_qty <= 0:
+            seal_qty = bids[0][1] if bids and bids[0] else 0
+            signal = 'limit_up_sealed'
+            reason = f"涨停封板，买一挂单 {seal_qty or 0} 手"
+        else:
+            signal = 'limit_opened'
+            reason = "触及涨停但卖盘未清空（可能开板）"
+    # 委比失衡（托盘/压盘）
+    elif vi_ratio is not None:
+        if vi_ratio >= vi_high:
+            signal = 'bid_dominant'
+            reason = f"买盘挂单显著大于卖盘（委比 {vi_ratio:.0%}），下方托盘"
+        elif vi_ratio <= vi_low:
+            signal = 'ask_dominant'
+            reason = f"卖盘挂单显著大于买盘（委比 {vi_ratio:.0%}），上方压盘"
+
+    if signal is None:
+        _order_book_state[stock_code] = {**state, 'last_check': time.time()}
+        return None
+
+    # 同信号节流
+    if state.get('last_signal') == signal and \
+            (state.get('last_time', 0) and (time.time() - state['last_time']) < check_interval):
+        return None
+
+    _order_book_state[stock_code] = _gen_state(stock_code, signal)
+
+    return {
+        'msg_type': 'order_book',
+        'signal': signal,
+        'reason': reason,
+        'vi_ratio': vi_ratio,
+        'bid_total': bid_total,
+        'ask_total': ask_total,
+    }
+
+
+def build_order_book_message(stock, signal: dict) -> str:
+    """构建五档盘口推送消息"""
+    stock_code = stock.get('code', 'UNKNOWN')
+    stock_name = stock.get('name', stock_code)
+
+    meta = {
+        'limit_up_sealed': ('🔒', '涨停封板'),
+        'limit_opened':    ('⚠️', '涨停开板'),
+        'bid_dominant':    ('🟢', '下方托盘'),
+        'ask_dominant':    ('🔴', '上方压盘'),
+    }.get(signal.get('signal', ''), ('📊', '盘口异动'))
+    icon, label = meta
+
+    vi_ratio = signal.get('vi_ratio')
+    vi_str = f"{vi_ratio:.0%}" if vi_ratio is not None else "N/A"
+    time_str = datetime.now().strftime('%H:%M:%S')
+
+    return f"""{icon} 【{label}】{signal.get('reason', '')}
+
+📊 {stock_name} ({stock_code})
+🛒 买盘挂单：{signal.get('bid_total', 0):.0f} 手
+🛍️ 卖盘挂单：{signal.get('ask_total', 0):.0f} 手
+⚖️ 委比：{vi_str}
+⏰ 时间：{time_str}
+
+请速速查看！{icon}"""
+
+
+# ---------- 功能八：量价背离 ----------
+
+def check_divergence_signal(stock_code, history: list,
+                            feature_cfg: dict,
+                            rsi: Optional[float] = None) -> Optional[dict]:
+    """
+    量价背离检测 → 顶背离/底背离信号
+
+    Returns:
+        None 或 {'signal': str, 'reason': str, 'msg_type': 'divergence', ...}
+    """
+    _reset_rt_daily_state()
+    if not history:
+        return None
+
+    cfg = feature_cfg or {}
+    check_interval = cfg.get('check_interval', 300)
+    window = cfg.get('window', 5)
+
+    state = _divergence_state.get(stock_code, {})
+    if _rt_throttled(state, check_interval):
+        return None
+
+    detection = detect_divergence(history, rsi=rsi, window=window)
+    if detection is None:
+        _divergence_state[stock_code] = {**state, 'last_check': time.time()}
+        return None
+
+    sig_type = detection['type']
+    signal = 'divergence_top' if sig_type == 'top' else 'divergence_bottom'
+
+    # 同信号节流
+    if state.get('last_signal') == signal and \
+            (state.get('last_time', 0) and (time.time() - state['last_time']) < check_interval):
+        return None
+
+    _divergence_state[stock_code] = _gen_state(stock_code, signal)
+
+    return {
+        'msg_type': 'divergence',
+        'signal': signal,
+        'strength': detection['strength'],
+        'reason': '顶背离：价格创新高但量能/RSI 未跟上，警惕见顶' if sig_type == 'top'
+                  else '底背离：价格创新低但量能回升，关注反弹',
+    }
+
+
+def build_divergence_message(stock, signal: dict) -> str:
+    """构建量价背离推送消息"""
+    stock_code = stock.get('code', 'UNKNOWN')
+    stock_name = stock.get('name', stock_code)
+    signal_type = signal.get('signal', '')
+
+    icon, label = ('⚠️', '顶背离·见顶警示') if signal_type == 'divergence_top' \
+        else ('🟡', '底背离·反弹关注')
+    strength = signal.get('strength', 0)
+    time_str = datetime.now().strftime('%H:%M:%S')
+
+    return f"""{icon} 【{label}】背离强度 {strength:.0%}
+
+📊 {stock_name} ({stock_code})
+🔍 {signal.get('reason', '')}
+⏰ 时间：{time_str}
+
+请结合趋势判断！{icon}"""
 

@@ -69,6 +69,27 @@ DEFAULT_CONFIG = {
         'min_alert_interval': 600,
         'max_daily_alerts_per_stock': 8,
     },
+    'real_time_features': {
+        'fund_flow': {
+            'enabled': False,
+            'check_interval': 300,
+            'net_inflow_th': 1000000,
+            'net_outflow_th': -1000000,
+            'ratio_th': 0.05,
+        },
+        'order_book': {
+            'enabled': False,
+            'check_interval': 120,
+            'vi_ratio_high': 0.6,
+            'vi_ratio_low': -0.6,
+            'seal_qty_th': 50000,
+        },
+        'divergence': {
+            'enabled': False,
+            'check_interval': 300,
+            'window': 5,
+        },
+    },
 }
 
 # 配置文件修改时间缓存

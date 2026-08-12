@@ -18,7 +18,8 @@
   ├── L2 确认 → 量价共振 / 极端涨跌 / 极端放量 三路径
   ├── 场景分类 → 9 种异动场景智能识别
   ├── 阶梯式递增告警 → 趋势/反转/时间衰减规则推送
-  └── 技术指标 → MA 金叉死叉 + RSI 过滤，独立于异动监控
+  ├── 技术指标 → MA 金叉死叉 + RSI 过滤，独立于异动监控
+  └── 实盘辅助功能 → 主力资金流 / 五档盘口 / 量价背离（独立开关，[FEATURES](FEATURES.md)）
 ```
 
 - **保活**: `cron` 触发 `keepalive_check.sh`，调用 Python `is_trading_day()` 判断交易日
@@ -35,11 +36,11 @@
 | 配置 | `lib/config.py` | JSON 加载/热加载 (mtime) + `.env` 读取 |
 | 日志 | `lib/logger.py` | RotatingFileHandler (10MB × 5) |
 | 交易日历 | `lib/trading_calendar.py` | 2026 A 股节假日 + 时段判断 + 动态间隔 |
-| 数据获取 | `lib/data_fetcher.py` | 腾讯→东方财富→新浪→网易，每源 3 重试 |
+| 数据获取 | `lib/data_fetcher.py` | 腾讯→东方财富→新浪→网易，每源 3 重试；额外 `fetch_fund_flow`(东财资金流) + `fetch_order_book`(腾讯五档) |
 | 波动率 | `lib/volatility.py` | 涨跌幅 / 振幅 / 量比 / 价格波动率 |
-| 告警决策 | `lib/alerter.py` | L1/L2 触发 + 9 场景分类 + 技术指标信号 + 消息构建 |
-| 通知推送 | `lib/notifier.py` | 阶梯式递增 + QQ C2C + 文件备份 |
-| 技术指标 | `lib/indicators.py` | MA / RSI 计算 + 金叉死叉检测 |
+| 告警决策 | `lib/alerter.py` | L1/L2 触发 + 9 场景分类 + 技术指标信号 + 实盘辅助判断（资金流/盘口/背离）+ 消息构建 |
+| 通知推送 | `lib/notifier.py` | 阶梯式递增 + QQ C2C + 文件备份 + `send_feature_alert`(实盘告警统一入口) |
+| 技术指标 | `lib/indicators.py` | MA / RSI 计算 + 金叉死叉检测 + 量价背离 `detect_divergence` |
 | 数据库 | `lib/database.py` | SQLite WAL + 批量写 + 30 天清理 + close 历史查询 |
 | 进程管理 | `lib/process.py` | PID 锁 + 信号处理 (SIGTERM/SIGINT) + 可中断 sleep |
 
@@ -191,6 +192,23 @@
 - 自动降级，`fetch_free_data()` 透明切换
 - 单只股票连续 3 次全源失败后进入指数退避冷却（60s → 120s → 240s ... 最大 3600s）
 - **串行取数（设计约束）**：刻意**不做并行批量取数**。免费数据源（腾讯/东方财富/新浪）会对同一 IP 的并发与高频请求做风控（限流、封 IP）。并行拉取 10 只股票会放大被封风险，故采用逐只串行 + 1.5s 请求间隔的保守策略。
+
+---
+
+## 实盘辅助功能
+
+独立于异动监控，统一由 `config.json → real_time_features` 控制，各自可开关。默认关闭，开启才发起对应请求（保护免费源频控）。详见 [FEATURES.md](FEATURES.md)。
+
+| 功能 | 数据源 | 判断 | 场景 |
+|------|--------|------|------|
+| 主力资金流 | 东财 `fflow/kline` | `fetch_fund_flow` + `check_fund_flow_signal` | 吸筹 / 出货 / 诱多 / 逆势吸筹 |
+| 五档盘口 | 腾讯 `qt.gtimg.cn` 买卖五档 | `fetch_order_book` + `check_order_book_signal` | 托盘 / 压盘 / 封板 / 开板 |
+| 量价背离 | 复用 DB 量价历史 + RSI 过滤 | `detect_divergence` + `check_divergence_signal` | 顶背离 / 底背离 |
+
+- 三个功能均**单只串行请求**，不违反「不可并行批量读取」约束。
+- 数据获取失败 → 依 `request_with_retry` 重试并降级，返回 None，跳过功能本轮，不影响其他功能。
+- 每个功能 `check_interval` 节流 + 同信号防重 + 独立 `try/except`，失败不阻断主循环。
+- 推送统一走 `notifier.send_feature_alert`，按 `signal['msg_type']` 分派消息构建，QQ 推送失败仍写文件兜底。
 
 ---
 
