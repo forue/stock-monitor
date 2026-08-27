@@ -16,6 +16,54 @@ mkdir -p "$(dirname "$LOGFILE")"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOGFILE"; }
 
+# ---- 日志轮转：daemon-stdout.log (最大 10MB，保留 3 个备份) ----
+rotate_daemon_stdout() {
+    local max_size=$((10 * 1024 * 1024))  # 10MB
+    local max_backups=3
+    if [ -f "$DAEMON_STDOUT" ]; then
+        local file_size=$(stat -f%z "$DAEMON_STDOUT" 2>/dev/null || stat -c%s "$DAEMON_STDOUT" 2>/dev/null || echo 0)
+        if [ "$file_size" -gt "$max_size" ]; then
+            # 删除最旧的备份
+            if [ -f "${DAEMON_STDOUT}.${max_backups}" ]; then
+                rm -f "${DAEMON_STDOUT}.${max_backups}"
+            fi
+            # 轮转：.3→删除, .2→.3, .1→.2, 当前→.1
+            for i in $(seq $((max_backups - 1)) -1 1); do
+                if [ -f "${DAEMON_STDOUT}.${i}" ]; then
+                    mv "${DAEMON_STDOUT}.${i}" "${DAEMON_STDOUT}.$((i + 1))"
+                fi
+            done
+            mv "$DAEMON_STDOUT" "${DAEMON_STDOUT}.1"
+            log "📝 daemon-stdout.log 已轮转 (原大小: ${file_size} bytes)"
+        fi
+    fi
+}
+
+# ---- 日志轮转：keepalive.log (最大 5MB，保留 2 个备份) ----
+rotate_keepalive_log() {
+    local max_size=$((5 * 1024 * 1024))  # 5MB
+    # (function defined before invocation)
+    local max_backups=2
+    if [ -f "$LOGFILE" ]; then
+        local file_size=$(stat -f%z "$LOGFILE" 2>/dev/null || stat -c%s "$LOGFILE" 2>/dev/null || echo 0)
+        if [ "$file_size" -gt "$max_size" ]; then
+            if [ -f "${LOGFILE}.${max_backups}" ]; then
+                rm -f "${LOGFILE}.${max_backups}"
+            fi
+            for i in $(seq $((max_backups - 1)) -1 1); do
+                if [ -f "${LOGFILE}.${i}" ]; then
+                    mv "${LOGFILE}.${i}" "${LOGFILE}.$((i + 1))"
+                fi
+            done
+            mv "$LOGFILE" "${LOGFILE}.1"
+        fi
+    fi
+}
+
+# ---- 执行日志轮转 (函数已定义) ----
+rotate_daemon_stdout
+rotate_keepalive_log
+
 # ---- 交易日判断 (使用 lib/trading_calendar.py 作为唯一数据源) ----
 if ! python3 -c "
 import sys; sys.path.insert(0, '${SCRIPT_DIR}')

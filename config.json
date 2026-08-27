@@ -29,17 +29,17 @@
 
   "l1_thresholds": {
     "_comment": "L1 初筛：至少2个条件同时满足 + 连续2次命中",
-    "price_change_rate": 0.01,
-    "price_change_pct": 2.5,
-    "volume_ratio": 2.0,
-    "amplitude": 0.02,
+    "price_change_rate": 0.02,
+    "price_change_pct": 3.0,
+    "volume_ratio": 2.5,
+    "amplitude": 0.03,
     "min_conditions_required": 2,
     "min_consecutive_hits": 2,
     "volume_ratio_by_session": {
-      "opening": 3.0,
-      "morning": 2.0,
-      "afternoon": 2.0,
-      "closing": 2.5
+      "opening": 3.5,
+      "morning": 2.5,
+      "afternoon": 2.5,
+      "closing": 3.0
     }
   },
 
@@ -103,22 +103,22 @@
   "real_time_features": {
     "_comment": "实盘辅助功能：主力资金流 / 五档盘口 / 量价背离。默认关闭，需开启 enabled 才发起对应请求（保护免费源频控）",
     "fund_flow": {
-      "enabled": false,
-      "check_interval": 300,
+      "enabled": true,
+      "check_interval": 600,
       "net_inflow_th": 1000000,
       "net_outflow_th": -1000000,
       "ratio_th": 0.05
     },
     "order_book": {
-      "enabled": false,
-      "check_interval": 120,
+      "enabled": true,
+      "check_interval": 300,
       "vi_ratio_high": 0.6,
       "vi_ratio_low": -0.6,
       "seal_qty_th": 50000
     },
     "divergence": {
-      "enabled": false,
-      "check_interval": 300,
+      "enabled": true,
+      "check_interval": 600,
       "window": 5
     }
   }

@@ -98,8 +98,8 @@ def main():
                 in_session, session_name = is_trading_session()
 
                 if not in_session:
-                    log(f"非交易时段 ({session_name})，休眠 5 分钟")
-                    interruptible_sleep(300)
+                    log(f"非交易时段 ({session_name})，休眠 15 分钟")
+                    interruptible_sleep(900)
                     continue
 
                 # 2. 遍历监控股票
@@ -177,56 +177,62 @@ def main():
 
                     # ============ 实盘辅助功能（各自独立，失败不阻断） ============
                     rt = config.get('real_time_features', {})
+                    from lib.alerter import _fund_flow_state, _order_book_state, _divergence_state, _rt_throttled
 
-                    # 功能一：主力资金流向
+                    # 功能一：主力资金流向（先检查节流再请求）
                     try:
                         ff_cfg = rt.get('fund_flow', {})
                         if ff_cfg.get('enabled', False):
-                            fund_flow = fetch_fund_flow(stock_code)
-                            if fund_flow:
-                                ff_signal = check_fund_flow_signal(
-                                    stock_code, fund_flow, metrics, ff_cfg)
-                                if ff_signal:
-                                    log(f"💰 {stock_name} 资金信号：{ff_signal['reason']}")
-                                    send_feature_alert(stock, ff_signal, config,
-                                                       BASE_DIR, ALERTS_FILE)
+                            ff_state = _fund_flow_state.get(stock_code, {})
+                            if not _rt_throttled(ff_state, ff_cfg.get('check_interval', 600)):
+                                fund_flow = fetch_fund_flow(stock_code)
+                                if fund_flow:
+                                    ff_signal = check_fund_flow_signal(
+                                        stock_code, fund_flow, metrics, ff_cfg)
+                                    if ff_signal:
+                                        log(f"💰 {stock_name} 资金信号：{ff_signal['reason']}")
+                                        send_feature_alert(stock, ff_signal, config,
+                                                           BASE_DIR, ALERTS_FILE)
                     except Exception as e:
                         log(f"主力资金流功能异常 ({stock_name}): {e}", level="ERROR")
 
-                    # 功能二：五档盘口
+                    # 功能二：五档盘口（先检查节流再请求）
                     try:
                         ob_cfg = rt.get('order_book', {})
                         if ob_cfg.get('enabled', False):
-                            order_book = fetch_order_book(stock_code)
-                            if order_book:
-                                ob_signal = check_order_book_signal(
-                                    stock_code, order_book, ob_cfg)
-                                if ob_signal:
-                                    log(f"🛒 {stock_name} 盘口信号：{ob_signal['reason']}")
-                                    send_feature_alert(stock, ob_signal, config,
-                                                       BASE_DIR, ALERTS_FILE)
+                            ob_state = _order_book_state.get(stock_code, {})
+                            if not _rt_throttled(ob_state, ob_cfg.get('check_interval', 300)):
+                                order_book = fetch_order_book(stock_code)
+                                if order_book:
+                                    ob_signal = check_order_book_signal(
+                                        stock_code, order_book, ob_cfg)
+                                    if ob_signal:
+                                        log(f"🛒 {stock_name} 盘口信号：{ob_signal['reason']}")
+                                        send_feature_alert(stock, ob_signal, config,
+                                                           BASE_DIR, ALERTS_FILE)
                     except Exception as e:
                         log(f"五档盘口功能异常 ({stock_name}): {e}", level="ERROR")
 
-                    # 功能八：量价背离
+                    # 功能八：量价背离（DB数据，无网络请求）
                     try:
                         dv_cfg = rt.get('divergence', {})
                         if dv_cfg.get('enabled', False):
-                            hist = get_price_volume_history(DB_FILE, stock_code,
-                                                            dv_cfg.get('window', 5) + 6)
-                            if hist:
-                                # 可选 RSI 辅助判断
-                                rsi = None
-                                dv_rsi_cfg = stock.get('tech_analysis', {})
-                                closes = [h['price'] for h in hist]
-                                if dv_rsi_cfg.get('enabled', False):
-                                    rsi = calc_rsi(closes, dv_rsi_cfg.get('rsi_period', 14))
-                                dv_signal = check_divergence_signal(
-                                    stock_code, hist, dv_cfg, rsi)
-                                if dv_signal:
-                                    log(f"🔀 {stock_name} 背离信号：{dv_signal['reason']}")
-                                    send_feature_alert(stock, dv_signal, config,
-                                                       BASE_DIR, ALERTS_FILE)
+                            dv_state = _divergence_state.get(stock_code, {})
+                            if not _rt_throttled(dv_state, dv_cfg.get('check_interval', 600)):
+                                hist = get_price_volume_history(DB_FILE, stock_code,
+                                                                dv_cfg.get('window', 5) + 6)
+                                if hist:
+                                    rsi = None
+                                    dv_rsi_cfg = stock.get('tech_analysis', {})
+                                    closes = [h['price'] for h in hist]
+                                    if dv_rsi_cfg.get('enabled', False):
+                                        rsi = calc_rsi(closes, dv_rsi_cfg.get('rsi_period', 14))
+                                    dv_signal = check_divergence_signal(
+                                        stock_code, hist, dv_cfg, rsi)
+                                    if dv_signal:
+                                        log(f"🔀 {stock_name} 背离信号：{dv_signal['reason']}")
+                                        send_feature_alert(stock, dv_signal, config,
+                                                           BASE_DIR, ALERTS_FILE)
                     except Exception as e:
                         log(f"量价背离功能异常 ({stock_name}): {e}", level="ERROR")
 

@@ -73,8 +73,8 @@ Entry point: `monitor-daemon.py` → main loop:
 |------|----------|
 | `lib/config.py` | Load config + `.env` reader (`load_env_file()`) |
 | `lib/indicators.py` | **NEW** MA/RSI calc, golden/death cross detection, `detect_divergence()` (top/bottom divergence) |
-| `lib/alerter.py` | L1/L2 triggers + 9 scenario classifications + `check_trading_signal()` + real-time checks: `check_fund_flow_signal()` / `check_order_book_signal()` / `check_divergence_signal()` |
-| `lib/notifier.py` | Staircase escalation alerts + `send_trading_signal()` + `send_feature_alert()` (real-time alert unified entry) |
+| `lib/alerter.py` | L1/L2 triggers + 11 scenario classifications (incl. limit_break_up/down) + `check_trading_signal()` + real-time checks: `check_fund_flow_signal()` / `check_order_book_signal()` / `check_divergence_signal()` |
+| `lib/notifier.py` | Staircase escalation alerts + limit state tracking (auto-detect board type) + post-alert suppression + `send_trading_signal()` + `send_feature_alert()` (real-time alert unified entry) |
 | `lib/volatility.py` | Price change rate, amplitude, volume ratio |
 | `lib/data_fetcher.py` | Multi-source: qt.gtimg.cn → push2.eastmoney → hq.sina → hq.sina (fallback); + `fetch_fund_flow()` (EastMoney) + `fetch_order_book()` (Tencent 5-level) |
 | `lib/trading_calendar.py` | A-share calendar, session detection, dynamic intervals |

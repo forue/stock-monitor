@@ -118,6 +118,45 @@ TIME_DECAY_DEVIATION = 0.01      # 时间衰减：偏离 ≥ 1%
 MAX_DAILY_NORMAL = 8             # 非极端每日上限
 MAX_DAILY_TOTAL = 15             # 绝对每日上限（含极端）
 
+# ============ 涨停/跌停状态追踪 ============
+# {stock_code: {'at_limit': bool, 'limit_type': 'up'|'down', 'limit_price': float, 'broken_direction': str}}
+_limit_state = {}
+_limit_state_date = None
+
+
+def _get_limit_pct(stock_code: str) -> float:
+    """
+    根据股票代码判断涨跌停幅度
+    
+    A股主板 (60xxxx, 00xxxx): ±10%
+    创业板 (30xxxx): ±20%
+    科创板 (68xxxx): ±20%
+    ST股票: ±5% (需要额外判断，这里先返回默认值)
+    """
+    if stock_code.startswith('30'):
+        return 20.0  # 创业板 ±20%
+    elif stock_code.startswith('68'):
+        return 20.0  # 科创板 ±20%
+    else:
+        return 10.0  # 主板 ±10%
+
+
+def _reset_limit_state():
+    """跨天重置涨停状态"""
+    global _limit_state_date
+    today = datetime.now().date()
+    if _limit_state_date != today:
+        _limit_state.clear()
+        _limit_state_date = today
+
+
+def _get_limit_state(stock_code: str) -> dict:
+    return _limit_state.get(stock_code, {})
+
+
+def _set_limit_state(stock_code: str, state: dict):
+    _limit_state[stock_code] = state
+
 
 def _reset_daily_state():
     global _daily_date
@@ -138,17 +177,20 @@ def _set_state(stock_code: str, state: dict):
 def _should_escalate(stock_code: str, stock_name: str, current_price: float,
                      change_pct: float, notif: dict,
                      escalation_config: dict = None,
-                     volatility: float = None) -> Optional[str]:
+                     volatility: float = None,
+                     volume_ratio: float = None) -> Optional[str]:
     """
     判断是否应该发送本次告警
 
     Args:
         volatility: 当前价格波动率（用于动态冷却计算），如 metrics['price_change_rate']
+        volume_ratio: 当前量比，用于后告警抑制判断
     Returns:
         None  → 不发
         str   → 场景 key
     """
     _reset_daily_state()
+    _reset_limit_state()
     state = _get_state(stock_code)
     now = time.time()
     abs_pct = abs(change_pct)
@@ -161,6 +203,79 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
 
     is_extreme = abs_pct >= extreme_pct
     current_dir = "up" if change_pct > 0 else "down"
+
+    # ============ 涨停/跌停状态追踪 ============
+    limit_state = _get_limit_state(stock_code)
+    
+    # 根据股票代码获取涨跌停幅度
+    limit_pct = _get_limit_pct(stock_code)
+    
+    # 涨停/跌停检测：涨跌幅 >= limit_pct - 0.5% 视为涨停/跌停
+    at_limit_now = abs_pct >= (limit_pct - 0.5)
+    
+    # 检测破板：之前在涨停，现在不在了
+    was_at_limit = limit_state.get('at_limit', False)
+    limit_type = limit_state.get('limit_type')
+    
+    # 如果之前不在涨停状态，但当前在涨停，则更新状态
+    if at_limit_now and not was_at_limit:
+        _set_limit_state(stock_code, {
+            'at_limit': True,
+            'limit_type': 'up' if change_pct > 0 else 'down',
+            'limit_price': current_price,
+            'first_limit_time': now,
+        })
+        limit_label = f"±{limit_pct:.0f}%"
+        log(f"{stock_name} 涨停/跌停检测：{change_pct:+.2f}% (阈值{limit_label})，进入涨停/跌停状态")
+    
+    # 更新涨停状态
+    if at_limit_now:
+        if not was_at_limit:
+            _set_limit_state(stock_code, {
+                'at_limit': True,
+                'limit_type': 'up' if change_pct > 0 else 'down',
+                'limit_price': current_price,
+                'first_limit_time': now,
+            })
+            # 首次涨停，允许第一次告警
+            pass
+        else:
+            # 持续涨停，静默（不触发常规告警）
+            if state:  # 已有过告警
+                log(f"{stock_name} 持续涨停中，静默")
+                return None
+    else:
+        if was_at_limit:
+            # 从涨停变为非涨停（破板）
+            _set_limit_state(stock_code, {
+                'at_limit': False,
+                'broken_direction': current_dir,
+                'broken_time': now,
+            })
+        else:
+            _set_limit_state(stock_code, {'at_limit': False})
+
+    # ============ 后告警抑制 ============
+    # 上次告警后，如果量小且波动低，跳过（但破板检测已绕过此逻辑）
+    if state:
+        last_time = state.get("time", 0)
+        elapsed_since_alert = now - last_time
+        if elapsed_since_alert < 600:  # 10分钟内
+            if volume_ratio is not None and volume_ratio < 1.5 and volatility is not None and volatility < 0.03:
+                log(f"{stock_name} 后告警抑制：量比{volume_ratio:.2f}<1.5 且 波动率{volatility:.2%}<3%，跳过")
+                return None
+    
+    # ============ 涨停/跌停破板特殊处理 ============
+    # 如果检测到破板，立即返回（绕过所有后续检查）
+    if was_at_limit and not at_limit_now:
+        broken_direction = limit_state.get('broken_direction')
+        if broken_direction and broken_direction != current_dir:
+            log(f"{stock_name} 破板确认：{limit_type}停→{current_dir}，触发破板告警")
+            _set_limit_state(stock_code, {'at_limit': False})
+            if limit_type == 'up':
+                return "limit_break_up"
+            else:
+                return "limit_break_down"
 
     # 第一次告警：直接允许
     if not state:
@@ -267,11 +382,13 @@ def send_alert(stock: dict, stock_data: dict, metrics: dict, config: dict,
     notif = config.get('notification', {})
     escalation_config = config.get('escalation', {})
 
-    # 阶梯式递增判断（传入波动率用于动态冷却）
+    # 阶梯式递增判断（传入波动率用于动态冷却，量比用于后告警抑制）
     volatility = metrics.get('price_change_rate')
+    volume_ratio = metrics.get('volume_ratio')
     escalation_scenario = _should_escalate(stock_code, stock_name,
                                            current_price, change_pct, notif,
-                                           escalation_config, volatility)
+                                           escalation_config, volatility,
+                                           volume_ratio)
     if escalation_scenario is None:
         return False
 
@@ -324,10 +441,39 @@ def send_alert(stock: dict, stock_data: dict, metrics: dict, config: dict,
 
 # ============ 告警文件写入 ============
 
+def _rotate_file(filepath: Path, max_size: int = 5 * 1024 * 1024, max_backups: int = 3):
+    """通用文件轮转：超过 max_size 时轮转，保留 max_backups 个备份"""
+    if not filepath.exists():
+        return
+    
+    try:
+        file_size = filepath.stat().st_size
+        if file_size <= max_size:
+            return
+        
+        # 删除最旧的备份
+        oldest = filepath.with_suffix(f"{filepath.suffix}.{max_backups}")
+        if oldest.exists():
+            oldest.unlink()
+        
+        # 轮转：.2→.3, .1→.2, 当前→.1
+        for i in range(max_backups - 1, 0, -1):
+            src = filepath.with_suffix(f"{filepath.suffix}.{i}")
+            if src.exists():
+                dst = filepath.with_suffix(f"{filepath.suffix}.{i + 1}")
+                src.rename(dst)
+        
+        # 当前文件 → .1
+        filepath.rename(filepath.with_suffix(f"{filepath.suffix}.1"))
+        log(f"文件轮转完成：{filepath.name} (原大小: {file_size // 1024}KB)")
+    except Exception as e:
+        log(f"文件轮转失败 ({filepath.name}): {e}", level="WARNING")
+
+
 def _write_alert_file(stock_code: str, stock_name: str, current_price: float,
                       change_pct: float, metrics: dict, message: str,
                       base_dir: Path, alerts_file: Path):
-    """写入告警文件备份（带轮转，超过 10MB 自动截断）"""
+    """写入告警文件备份（带轮转）"""
     alert_record = {
         'timestamp': datetime.now().isoformat(),
         'stock_code': stock_code,
@@ -343,13 +489,7 @@ def _write_alert_file(stock_code: str, stock_name: str, current_price: float,
     try:
         for alert_file in [base_dir / "logs" / "qq-alert-queue.jsonl", alerts_file]:
             try:
-                if alert_file.exists() and alert_file.stat().st_size > 10 * 1024 * 1024:
-                    with open(alert_file, 'r', encoding='utf-8') as f:
-                        lines = f.readlines()
-                    keep = lines[len(lines) // 2:]
-                    with open(alert_file, 'w', encoding='utf-8') as f:
-                        f.writelines(keep)
-                    log(f"告警文件轮转：{alert_file.name}")
+                _rotate_file(alert_file, max_size=5 * 1024 * 1024, max_backups=3)
             except Exception as e:
                 log(f"告警文件轮转失败 ({alert_file.name}): {e}", level="WARNING")
             with open(alert_file, 'a', encoding='utf-8') as f:

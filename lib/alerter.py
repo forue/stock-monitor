@@ -34,6 +34,28 @@ _l2_hit_count = {}
 _l1_first_hit_time = {}
 _l2_first_hit_time = {}
 
+# ============ 涨停/跌停状态追踪 ============
+# {stock_code: {'at_limit': bool, 'limit_type': 'up'|'down', 'limit_price': float, 'last_alert_time': float}}
+_limit_state = {}
+_limit_state_date = None
+
+
+def _reset_limit_state():
+    """跨天重置涨停状态"""
+    global _limit_state_date
+    today = datetime.now().date()
+    if _limit_state_date != today:
+        _limit_state.clear()
+        _limit_state_date = today
+
+
+def _get_limit_state(stock_code: str) -> dict:
+    return _limit_state.get(stock_code, {})
+
+
+def _set_limit_state(stock_code: str, state: dict):
+    _limit_state[stock_code] = state
+
 
 def _reset_tracker(stock_code: str):
     _l1_hit_count.pop(stock_code, None)
@@ -215,6 +237,8 @@ SCENARIO_META = {
     "trend_continue_down":  {"icon": "🧊", "label": "跌势加速", "desc": "同向持续扩大，趋势强化"},
     "rebound":              {"icon": "🔄", "label": "低位反弹", "desc": "跌后反转回升，关注是否为反转信号"},
     "pullback":             {"icon": "⚠️", "label": "高位回落", "desc": "涨后反转下跌，关注是否为见顶信号"},
+    "limit_break_up":       {"icon": "🔓", "label": "涨停破板", "desc": "涨停后开板，关注是否为出货信号"},
+    "limit_break_down":     {"icon": "🔓", "label": "跌停破板", "desc": "跌停后开板，关注是否为抄底信号"},
 }
 
 
