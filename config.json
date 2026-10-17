@@ -1,32 +1,345 @@
 {
   "_comment": "股票监控配置 v4.1 — 量价组合确认 + 阶梯式递增告警 + 多场景分类",
   "stocks": [
-    {"code": "600104", "name": "上汽集团", "enabled": true,
-     "tech_analysis": {
+    {
+      "code": "600104",
+      "name": "上汽集团",
+      "enabled": true,
+      "tech_analysis": {
         "enabled": true,
         "ma_fast": 8,
         "ma_slow": 20,
         "ma_filter": 60,
-        "ma_filter_pct": 0.80,
+        "ma_filter_pct": 0.8,
         "rsi_period": 14,
         "rsi_max": 70,
         "check_interval": 300,
         "min_signal_interval": 3600
-     }},
-    {"code": "002475", "name": "立讯精密", "enabled": true},
-    {"code": "600519", "name": "贵州茅台", "enabled": true},
-    {"code": "002402", "name": "和而泰", "enabled": true},
-    {"code": "601611", "name": "中国核建", "enabled": true},
-    {"code": "601012", "name": "隆基绿能", "enabled": true},
-    {"code": "600028", "name": "中国石化", "enabled": true},
-    {"code": "002736", "name": "国信证券", "enabled": true},
-    {"code": "601890", "name": "亚星锚链", "enabled": true},
-    {"code": "600150", "name": "中国船舶", "enabled": true},
-    {"code": "001270", "name": "铖昌科技", "enabled": true},
-    {"code": "603738", "name": "泰晶科技", "enabled": true},
-    {"code": "603773", "name": "沃格光电", "enabled": true}
+      },
+      "_backtest_ref": {
+        "strategy": "dual_ma",
+        "total_return_pct": 22.29,
+        "annual_return_pct": 11.49,
+        "alpha_pct": 51.74,
+        "sharpe": 0.55,
+        "max_drawdown_pct": -26.09,
+        "win_rate_pct": 54.5,
+        "buy_hold_return_pct": -29.45
+      }
+    },
+    {
+      "code": "002475",
+      "name": "立讯精密",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 8,
+        "ma_slow": 30,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.9,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 138.92,
+        "annual_return_pct": 67.4,
+        "alpha_pct": 124.87,
+        "sharpe": 1.75,
+        "max_drawdown_pct": -20.94,
+        "win_rate_pct": 50,
+        "buy_hold_return_pct": 14.05
+      }
+    },
+    {
+      "code": "600519",
+      "name": "贵州茅台",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 3,
+        "ma_slow": 20,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.8,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "dual_ma",
+        "total_return_pct": -4.9,
+        "annual_return_pct": -2.68,
+        "alpha_pct": 11.85,
+        "sharpe": -0.15,
+        "max_drawdown_pct": -18.01,
+        "win_rate_pct": 37.5,
+        "buy_hold_return_pct": -16.75
+      }
+    },
+    {
+      "code": "002402",
+      "name": "和而泰",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 8,
+        "ma_slow": 30,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.8,
+        "rsi_period": 14,
+        "rsi_max": 75,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 174.48,
+        "annual_return_pct": 81.72,
+        "alpha_pct": 178.29,
+        "sharpe": 1.82,
+        "max_drawdown_pct": -17.65,
+        "win_rate_pct": 50,
+        "buy_hold_return_pct": -3.81
+      }
+    },
+    {
+      "code": "601611",
+      "name": "中国核建",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 10,
+        "ma_slow": 20,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.8,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 34.76,
+        "annual_return_pct": 19.3,
+        "alpha_pct": 19.28,
+        "sharpe": 0.66,
+        "max_drawdown_pct": -26.23,
+        "win_rate_pct": 46.2,
+        "buy_hold_return_pct": 15.48
+      }
+    },
+    {
+      "code": "601012",
+      "name": "隆基绿能",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 3,
+        "ma_slow": 60,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.8,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "dual_ma",
+        "total_return_pct": 10,
+        "annual_return_pct": 5.8,
+        "alpha_pct": 38.63,
+        "sharpe": 0.36,
+        "max_drawdown_pct": -25.86,
+        "win_rate_pct": 28.6,
+        "buy_hold_return_pct": -28.63
+      }
+    },
+    {
+      "code": "600028",
+      "name": "中国石化",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 8,
+        "ma_slow": 60,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.8,
+        "rsi_period": 14,
+        "rsi_max": 80,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 9.9,
+        "annual_return_pct": 5.74,
+        "alpha_pct": 27.53,
+        "sharpe": 0.37,
+        "max_drawdown_pct": -19.13,
+        "win_rate_pct": 45.5,
+        "buy_hold_return_pct": -17.63
+      }
+    },
+    {
+      "code": "002736",
+      "name": "国信证券",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 20,
+        "ma_slow": 60,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.8,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 20.05,
+        "annual_return_pct": 11.41,
+        "alpha_pct": 23.72,
+        "sharpe": 0.84,
+        "max_drawdown_pct": -13.97,
+        "win_rate_pct": 33.3,
+        "buy_hold_return_pct": -3.67
+      }
+    },
+    {
+      "code": "601890",
+      "name": "亚星锚链",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 10,
+        "ma_slow": 30,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.8,
+        "rsi_period": 14,
+        "rsi_max": 80,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 47.05,
+        "annual_return_pct": 25.62,
+        "alpha_pct": 29.37,
+        "sharpe": 0.81,
+        "max_drawdown_pct": -25.49,
+        "win_rate_pct": 58.8,
+        "buy_hold_return_pct": 17.68
+      }
+    },
+    {
+      "code": "600150",
+      "name": "中国船舶",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 8,
+        "ma_slow": 20,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.8,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 11.4,
+        "annual_return_pct": 6.66,
+        "alpha_pct": 7.19,
+        "sharpe": 0.38,
+        "max_drawdown_pct": -22.19,
+        "win_rate_pct": 41.2,
+        "buy_hold_return_pct": 4.2
+      }
+    },
+    {
+      "code": "001270",
+      "name": "铖昌科技",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 8,
+        "ma_slow": 30,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.9,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 254.22,
+        "annual_return_pct": 113.2,
+        "alpha_pct": 129.86,
+        "sharpe": 2.19,
+        "max_drawdown_pct": -19.39,
+        "win_rate_pct": 62.5,
+        "buy_hold_return_pct": 124.35
+      }
+    },
+    {
+      "code": "603738",
+      "name": "泰晶科技",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 20,
+        "ma_slow": 60,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.9,
+        "rsi_period": 14,
+        "rsi_max": 70,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 179.23,
+        "annual_return_pct": 83.57,
+        "alpha_pct": 87.78,
+        "sharpe": 1.57,
+        "max_drawdown_pct": -29.15,
+        "win_rate_pct": 44.4,
+        "buy_hold_return_pct": 91.45
+      }
+    },
+    {
+      "code": "603773",
+      "name": "沃格光电",
+      "enabled": true,
+      "tech_analysis": {
+        "enabled": true,
+        "ma_fast": 10,
+        "ma_slow": 30,
+        "ma_filter": 60,
+        "ma_filter_pct": 0.9,
+        "rsi_period": 14,
+        "rsi_max": 75,
+        "check_interval": 300,
+        "min_signal_interval": 3600
+      },
+      "_backtest_ref": {
+        "strategy": "multi_factor",
+        "total_return_pct": 289.8,
+        "annual_return_pct": 123.62,
+        "alpha_pct": 71.29,
+        "sharpe": 1.77,
+        "max_drawdown_pct": -34.41,
+        "win_rate_pct": 42.9,
+        "buy_hold_return_pct": 218.51
+      }
+    }
   ],
-
   "l1_thresholds": {
     "_comment": "L1 初筛：至少2个条件同时满足 + 连续2次命中",
     "price_change_rate": 0.02,
@@ -42,7 +355,6 @@
       "closing": 3.0
     }
   },
-
   "l2_thresholds": {
     "_comment": "L2 确认: 量价共振 A|B|C 三条路径 + 连续2次确认",
     "price_change_pct": 3.0,
@@ -58,7 +370,6 @@
       "closing": 4.0
     }
   },
-
   "escalation": {
     "_comment": "阶梯式递增告警参数 (偏差值为小数，如 0.02 = 2%)",
     "cooldown_seconds": 180,
@@ -70,57 +381,52 @@
     "max_daily_normal": 8,
     "max_daily_total": 15
   },
-
-    "time_strategy": {
-      "intervals": {
-        "high_volatility": 3,
-        "normal": 8,
-        "off_hours": 300
-      }
-    },
-
-    "tech_analysis_defaults": {
-      "_comment": "技术指标全局默认（每只股票可独立覆盖）",
-      "enabled": false,
-      "ma_fast": 8,
-      "ma_slow": 20,
-      "ma_filter": 60,
-      "ma_filter_pct": 0.80,
-      "rsi_period": 14,
-      "rsi_max": 70,
-      "check_interval": 300,
-      "min_signal_interval": 3600
-    },
-
-    "notification": {
+  "time_strategy": {
+    "intervals": {
+      "high_volatility": 3,
+      "normal": 8,
+      "off_hours": 300
+    }
+  },
+  "tech_analysis_defaults": {
+    "_comment": "技术指标全局默认（每只股票可独立覆盖）",
+    "enabled": false,
+    "ma_fast": 8,
+    "ma_slow": 20,
+    "ma_filter": 60,
+    "ma_filter_pct": 0.8,
+    "rsi_period": 14,
+    "rsi_max": 70,
+    "check_interval": 300,
+    "min_signal_interval": 3600
+  },
+  "notification": {
     "_comment": "QQ 推送敏感信息 (qq_app_id/qq_client_secret/user_openid) 已迁移至 .env 文件",
     "enabled": true,
     "channel": "qqbot_c2c",
     "min_alert_interval": 600,
     "max_daily_alerts_per_stock": 8
   },
-
   "real_time_features": {
     "_comment": "实盘辅助功能：主力资金流 / 五档盘口 / 量价背离。默认关闭，需开启 enabled 才发起对应请求（保护免费源频控）",
     "fund_flow": {
-      "enabled": true,
+      "enabled": false,
       "check_interval": 600,
       "net_inflow_th": 1000000,
       "net_outflow_th": -1000000,
       "ratio_th": 0.05
     },
     "order_book": {
-      "enabled": true,
+      "enabled": false,
       "check_interval": 300,
       "vi_ratio_high": 0.6,
       "vi_ratio_low": -0.6,
       "seal_qty_th": 50000
     },
     "divergence": {
-      "enabled": true,
+      "enabled": false,
       "check_interval": 600,
       "window": 5
     }
   }
-
 }

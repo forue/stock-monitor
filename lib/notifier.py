@@ -268,14 +268,12 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
     # ============ 涨停/跌停破板特殊处理 ============
     # 如果检测到破板，立即返回（绕过所有后续检查）
     if was_at_limit and not at_limit_now:
-        broken_direction = limit_state.get('broken_direction')
-        if broken_direction and broken_direction != current_dir:
-            log(f"{stock_name} 破板确认：{limit_type}停→{current_dir}，触发破板告警")
-            _set_limit_state(stock_code, {'at_limit': False})
-            if limit_type == 'up':
-                return "limit_break_up"
-            else:
-                return "limit_break_down"
+        log(f"{stock_name} 破板确认：{limit_type}停→当前{change_pct:+.2f}%，触发破板告警")
+        _set_limit_state(stock_code, {'at_limit': False})
+        if limit_type == 'up':
+            return "limit_break_up"
+        else:
+            return "limit_break_down"
 
     # 第一次告警：直接允许
     if not state:

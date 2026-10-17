@@ -563,6 +563,29 @@ _order_book_state = {}
 _divergence_state = {}
 _rt_daily_date = None
 
+# ============ 全局限流：实盘功能告警 ============
+_rt_alert_timestamps = []  # 全局实盘告警时间戳列表
+_RT_ALERT_LIMIT = 10  # 每分钟最多实盘告警数
+_RT_ALERT_WINDOW = 60  # 滑动窗口（秒）
+
+
+def _rt_global_throttled() -> bool:
+    """全局限流：检查每分钟实盘告警数是否超限"""
+    import time
+    now = time.time()
+    # 清理过期时间戳
+    global _rt_alert_timestamps
+    _rt_alert_timestamps = [t for t in _rt_alert_timestamps if now - t < _RT_ALERT_WINDOW]
+    if len(_rt_alert_timestamps) >= _RT_ALERT_LIMIT:
+        return True
+    return False
+
+
+def _rt_record_alert():
+    """记录一次实盘告警"""
+    import time
+    _rt_alert_timestamps.append(time.time())
+
 
 def _reset_rt_daily_state():
     """跨天重置实盘辅助功能状态"""
@@ -652,12 +675,19 @@ def check_fund_flow_signal(stock_code, fund_flow: dict, metrics: dict,
             (state.get('last_time', 0) and (time.time() - state['last_time']) < check_interval):
         return None
 
+    # 全局限流：避免过多实盘告警
+    if _rt_global_throttled():
+        log(f"{stock_code} 实盘告警全局限流中，跳过", level="DEBUG")
+        return None
+
     _fund_flow_state[stock_code] = {
         **state,
         'last_signal': signal,
         'last_time': time.time(),
         'last_check': time.time(),
     }
+
+    _rt_record_alert()
 
     return {
         'msg_type': 'fund_flow',
@@ -765,7 +795,13 @@ def check_order_book_signal(stock_code, order_book: dict,
             (state.get('last_time', 0) and (time.time() - state['last_time']) < check_interval):
         return None
 
+    # 全局限流
+    if _rt_global_throttled():
+        log(f"{stock_code} 实盘告警全局限流中，跳过", level="DEBUG")
+        return None
+
     _order_book_state[stock_code] = _gen_state(stock_code, signal)
+    _rt_record_alert()
 
     return {
         'msg_type': 'order_book',
@@ -841,7 +877,13 @@ def check_divergence_signal(stock_code, history: list,
             (state.get('last_time', 0) and (time.time() - state['last_time']) < check_interval):
         return None
 
+    # 全局限流
+    if _rt_global_throttled():
+        log(f"{stock_code} 实盘告警全局限流中，跳过", level="DEBUG")
+        return None
+
     _divergence_state[stock_code] = _gen_state(stock_code, signal)
+    _rt_record_alert()
 
     return {
         'msg_type': 'divergence',
