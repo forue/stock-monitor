@@ -127,10 +127,41 @@ MAX_DAILY_TOTAL = 15             # 绝对每日上限（含极端）
 _limit_state = {}
 _limit_state_date = None
 
-# 破板检测参数
-MIN_LIMIT_DURATION = 30           # 最短封板时长（秒），短于此视为假封板
-BREAK_CONFIRM_INTERVAL = 10       # 破板确认最小间隔（秒），防止瞬间抖动误报
-MIN_RESEAL_DURATION = 60          # 回封最短时长（秒），防止回封瞬间又破板的抖动
+# 破板检测参数（可通过 config.json 的 limit_detection 覆盖）
+DEFAULT_LIMIT_DETECTION = {
+    'min_limit_duration': 30,      # 最短封板时长（秒），短于此视为假封板
+    'break_confirm_interval': 10,  # 破板确认最小间隔（秒），防止瞬间抖动误报
+    'min_reseal_duration': 60,     # 回封最短时长（秒），防止回封瞬间又破板
+    'log_wait_interval': 60,       # 破板等待日志最小间隔（秒），防止刷屏
+}
+
+# 当前生效的检测参数（由 set_limit_detection_config 初始化）
+_limit_detection = {**DEFAULT_LIMIT_DETECTION}
+
+# 破板详情缓存（用于消息构建），带过期清理
+_break_detail_cache = {}  # {stock_code: {'limit_price': float, 'limit_duration': float, 'break_count': int, 'expire_at': float}}
+_BREAK_CACHE_TTL = 300  # 破板详情缓存有效期（秒）
+
+
+def set_limit_detection_config(config: dict):
+    """从配置文件加载破板检测参数"""
+    global _limit_detection
+    user_cfg = config.get('limit_detection', {})
+    _limit_detection = {**DEFAULT_LIMIT_DETECTION, **user_cfg}
+    log(f"破板检测参数已加载: {_limit_detection}")
+
+
+def _get_limit_detection(key: str) -> float:
+    """获取破板检测参数"""
+    return _limit_detection.get(key, DEFAULT_LIMIT_DETECTION.get(key, 0))
+
+
+def _cleanup_break_cache():
+    """清理过期的破板详情缓存"""
+    now = time.time()
+    expired = [k for k, v in _break_detail_cache.items() if v.get('expire_at', 0) < now]
+    for k in expired:
+        del _break_detail_cache[k]
 
 
 def _calc_limit_price(close_price: float, limit_pct: float, direction: str) -> float:
@@ -179,16 +210,26 @@ def _is_at_limit_price(current_price: float, limit_price: float, direction: str)
         return current_price <= (limit_price + tol)
 
 
-def _get_limit_pct(stock_code: str) -> float:
+def _get_limit_pct(stock_code: str, stock_name: str = None) -> float:
     """
     根据股票代码判断涨跌停幅度
     
-    A股规则：
-    - 主板 (60xxxx, 00xxxx): ±10%
-    - 创业板 (30xxxx): ±20%
-    - 科创板 (68xxxx): ±20%
-    - 北交所 (8xxxxx, 4xxxxx): ±30%
-    - ST股票: ±5% (需要额外判断，这里先返回默认值)
+    A股规则（2026年7月6日主板ST调整后）：
+    - 主板 (60xxxx, 00xxxx): ±10%（ST与普通股票一致）
+    - 创业板 (30xxxx): ±20%（ST与普通股票一致）
+    - 科创板 (68xxxx): ±20%（ST与普通股票一致）
+    - 北交所 (8xxxxx, 4xxxxx): ±30%（ST与普通股票一致）
+    
+    历史变更：
+    - 2020年创业板改革：创业板ST从5%调整为20%
+    - 2020年科创板设立：科创板ST即为20%
+    - 2026年7月6日：主板ST从5%调整为10%（与主板普通股票统一）
+    
+    现在所有板块的ST股票涨跌幅与该板块普通股票一致。
+    
+    Args:
+        stock_code: 股票代码
+        stock_name: 股票名称（保留参数以兼容调用，现已不用于涨跌幅判断）
     """
     if stock_code.startswith('30'):
         return 20.0  # 创业板 ±20%
@@ -197,7 +238,7 @@ def _get_limit_pct(stock_code: str) -> float:
     elif stock_code.startswith('8') or stock_code.startswith('4'):
         return 30.0  # 北交所 ±30%
     else:
-        return 10.0  # 主板 ±10%
+        return 10.0  # 主板 ±10%（2026年7月起ST与普通一致）
 
 
 def _reset_limit_state():
@@ -271,7 +312,7 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
 
     # ============ 涨停/跌停状态追踪 ============
     limit_state = _get_limit_state(stock_code)
-    limit_pct = _get_limit_pct(stock_code)
+    limit_pct = _get_limit_pct(stock_code, stock_name)  # 传入stock_name以支持ST判断
 
     # 精确涨跌停价计算
     # 优先使用缓存的昨收价（更准确），其次使用数据源的close_price
@@ -327,11 +368,12 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
             if below_limit_since is None:
                 # 检查是否需要验证回封时长（如果之前已经破过板）
                 reseal_time = limit_state.get('reseal_time')
+                min_reseal = _get_limit_detection('min_reseal_duration')
                 if break_count > 0 and reseal_time:
                     reseal_duration = now - reseal_time
-                    if reseal_duration < MIN_RESEAL_DURATION:
+                    if reseal_duration < min_reseal:
                         # 回封时间太短，视为抖动，不触发新破板
-                        log(f"{stock_name} 回封仅{reseal_duration:.0f}s(<{MIN_RESEAL_DURATION}s)，视为抖动")
+                        log(f"{stock_name} 回封仅{reseal_duration:.0f}s(<{min_reseal}s)，视为抖动")
                         _set_limit_state(stock_code, {'at_limit': False, 'break_count': break_count})
                         return None
 
@@ -350,19 +392,37 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
                 below_duration = now - below_limit_since
                 limit_duration = now - first_limit_time if first_limit_time else 0
 
-                # 条件1：封板时长足够（>=30秒，排除瞬间假封板）
-                # 条件2：跌破持续足够（>=10秒，排除瞬间抖动）
-                if limit_duration >= MIN_LIMIT_DURATION and below_duration >= BREAK_CONFIRM_INTERVAL:
+                min_limit_dur = _get_limit_detection('min_limit_duration')
+                break_confirm = _get_limit_detection('break_confirm_interval')
+
+                if limit_duration >= min_limit_dur and below_duration >= break_confirm:
+                    # 清理过期缓存
+                    _cleanup_break_cache()
+                    
                     new_break_count = break_count + 1
                     _set_limit_state(stock_code, {'at_limit': False, 'break_count': new_break_count})
+                    
+                    # 缓存破板详情，供消息构建使用（带过期时间）
+                    _break_detail_cache[stock_code] = {
+                        'limit_price': limit_state.get('limit_price'),
+                        'limit_duration': limit_duration,
+                        'break_count': new_break_count,
+                        'break_time': now,
+                        'expire_at': now + _BREAK_CACHE_TTL,
+                    }
+                    
                     log(f"{stock_name} 破板确认（第{new_break_count}次）：封板{limit_duration:.0f}s，跌破{below_duration:.0f}s，当前{change_pct:+.2f}%")
                     if limit_type == 'up':
                         return "limit_break_up"
                     else:
                         return "limit_break_down"
                 else:
-                    # 条件不满足，继续等待
-                    log(f"{stock_name} 破板等待中：封板{limit_duration:.0f}s(<{MIN_LIMIT_DURATION}s) 或 跌破{below_duration:.0f}s(<{BREAK_CONFIRM_INTERVAL}s)")
+                    # 条件不满足，继续等待（控制日志频率）
+                    last_wait_log = limit_state.get('last_wait_log', 0)
+                    log_interval = _get_limit_detection('log_wait_interval')
+                    if now - last_wait_log >= log_interval:
+                        log(f"{stock_name} 破板等待中：封板{limit_duration:.0f}s(<{min_limit_dur}s) 或 跌破{below_duration:.0f}s(<{break_confirm}s)")
+                        _set_limit_state(stock_code, {**limit_state, 'last_wait_log': now})
                     return None
         else:
             # 从未在涨/跌停
@@ -504,6 +564,11 @@ def send_alert(stock: dict, stock_data: dict, metrics: dict, config: dict,
     else:
         scenario = escalation_scenario
 
+    # 构建破板详情（如果是破板场景，使用缓存的破板信息）
+    limit_info = None
+    if scenario in ("limit_break_up", "limit_break_down"):
+        limit_info = _break_detail_cache.pop(stock_code, None)
+
     # 更新状态
     _update_state(stock_code, current_price, change_pct, scenario)
     new_state = _get_state(stock_code)
@@ -517,10 +582,10 @@ def send_alert(stock: dict, stock_data: dict, metrics: dict, config: dict,
     else:
         last_alert_info = None
 
-    # 构建消息（带场景和上次参考价）
+    # 构建消息（带场景、上次参考价和破板详情）
     message = build_alert_message(stock, stock_data, metrics,
                                   triggered_l1, triggered_l2,
-                                  scenario, last_alert_info)
+                                  scenario, last_alert_info, limit_info)
     log(f"准备推送告警 [{scenario}]：{stock_name} {change_pct:+.2f}% (今日第{new_state['count_today']}次)")
 
     # QQ 推送（优先从环境变量读取，config.json 作为 fallback）

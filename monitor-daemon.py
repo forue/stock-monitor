@@ -48,7 +48,8 @@ from lib.volatility import calculate_volatility
 from lib.alerter import (should_trigger_l1, confirm_alert, reset_stock_tracker,
                          check_trading_signal, check_fund_flow_signal,
                          check_order_book_signal, check_divergence_signal)
-from lib.notifier import (send_alert, send_trading_signal, send_feature_alert)
+from lib.notifier import (send_alert, send_trading_signal, send_feature_alert,
+                          set_limit_detection_config)
 from lib.indicators import get_price_volume_history, calc_rsi
 from lib.database import init_database, cleanup_old_data, DBWriter
 import lib.process as process_mod
@@ -72,6 +73,9 @@ def main():
     # 加载配置
     config = load_config(CONFIG_FILE)
     init_config_mtime(CONFIG_FILE)
+    
+    # 初始化破板检测参数
+    set_limit_detection_config(config)
 
     # 初始化数据库
     init_database(DB_FILE)
@@ -94,7 +98,10 @@ def main():
         while process_mod.running:
             try:
                 # 0. 检测配置变更
-                config = reload_config_if_changed(CONFIG_FILE, config)
+                new_config = reload_config_if_changed(CONFIG_FILE, config)
+                if new_config is not config:
+                    config = new_config
+                    set_limit_detection_config(config)  # 重新加载破板检测参数
 
                 # 1. 判断交易时段
                 in_session, session_name = is_trading_session()

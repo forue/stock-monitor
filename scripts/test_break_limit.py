@@ -7,8 +7,15 @@ import time
 from lib.notifier import (
     _should_escalate, _limit_state,
     _calc_limit_price, _is_at_limit_price, _get_limit_pct,
-    MIN_LIMIT_DURATION, BREAK_CONFIRM_INTERVAL, MIN_RESEAL_DURATION
+    _get_limit_detection, set_limit_detection_config
 )
+
+# 设置默认检测参数
+set_limit_detection_config({})
+
+MIN_LIMIT_DURATION = _get_limit_detection('min_limit_duration')
+BREAK_CONFIRM_INTERVAL = _get_limit_detection('break_confirm_interval')
+MIN_RESEAL_DURATION = _get_limit_detection('min_reseal_duration')
 
 PASS = 0
 FAIL = 0
@@ -30,6 +37,23 @@ print(f"创业板涨停价(昨收100): {_calc_limit_price(100.0, 20.0, 'up')} (e
 print(f"主板跌停价(昨收10.15): {_calc_limit_price(10.15, 10.0, 'down')} (expect 9.14)")
 print()
 
+print("=== 涨跌停幅度判断测试（2026年7月后规则） ===")
+# 主板（ST已统一为10%）
+test("主板普通股票", _get_limit_pct('600104', '上汽集团'), 10.0)
+test("主板普通股票(00开头)", _get_limit_pct('002475', '立讯精密'), 10.0)
+test("主板ST股票(已统一为10%)", _get_limit_pct('600104', 'ST上气'), 10.0)
+test("主板*ST股票(已统一为10%)", _get_limit_pct('600104', '*ST上气'), 10.0)
+# 创业板
+test("创业板普通", _get_limit_pct('300001', '特锐德'), 20.0)
+test("创业板ST", _get_limit_pct('300001', 'ST特锐德'), 20.0)
+# 科创板
+test("科创板普通", _get_limit_pct('688001', '华兴源创'), 20.0)
+test("科创板ST", _get_limit_pct('688001', 'ST华兴'), 20.0)
+# 北交所
+test("北交所普通", _get_limit_pct('830799', '艾融软件'), 30.0)
+test("北交所ST", _get_limit_pct('830799', 'ST艾融'), 30.0)
+print()
+
 print("=== 涨跌停判定测试 ===")
 # 主板，昨收10.15，涨停价11.17
 test("现价11.17 = 涨停", _is_at_limit_price(11.17, 11.17, 'up'), True)
@@ -48,6 +72,12 @@ now = time.time()
 # 清理缓存干扰
 from lib.close_cache import clear_cache
 clear_cache()
+
+# 清理涨跌停状态（避免跨测试干扰）
+from lib.notifier import _reset_limit_state, _limit_state_date
+import lib.notifier as notifier
+notifier._limit_state_date = None  # 重置日期，确保下次调用不会清空
+_reset_limit_state()  # 设置日期为今天
 
 # 1. 涨停后破板
 _limit_state.clear()

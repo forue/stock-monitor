@@ -28,26 +28,44 @@ CACHE_FILE = Path(__file__).parent.parent / "data" / "close_prices.json"
 # 缓存过期天数（保留最近3天）
 CACHE_EXPIRE_DAYS = 3
 
+# 内存缓存（避免频繁读文件）
+_memory_cache = None
+_memory_cache_mtime = 0
+
 
 def _load_cache() -> dict:
-    """加载缓存文件"""
+    """加载缓存文件（带内存缓存）"""
+    global _memory_cache, _memory_cache_mtime
+    
+    # 如果文件不存在，返回内存缓存（可能为空）
     if not CACHE_FILE.exists():
-        return {}
+        return _memory_cache or {}
     
     try:
+        # 检查文件修改时间，避免不必要的读取
+        current_mtime = CACHE_FILE.stat().st_mtime
+        if _memory_cache is not None and current_mtime == _memory_cache_mtime:
+            return _memory_cache
+        
         with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            _memory_cache = json.load(f)
+            _memory_cache_mtime = current_mtime
+            return _memory_cache
     except (json.JSONDecodeError, IOError) as e:
         log(f"收盘价缓存加载失败: {e}", level="WARNING")
-        return {}
+        return _memory_cache or {}
 
 
 def _save_cache(cache: dict):
     """保存缓存文件"""
+    global _memory_cache, _memory_cache_mtime
     try:
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(cache, f, ensure_ascii=False, indent=2)
+        # 更新内存缓存
+        _memory_cache = cache
+        _memory_cache_mtime = CACHE_FILE.stat().st_mtime
     except IOError as e:
         log(f"收盘价缓存保存失败: {e}", level="WARNING")
 

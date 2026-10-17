@@ -428,5 +428,12 @@
       "check_interval": 600,
       "window": 5
     }
+  },
+  "limit_detection": {
+    "_comment": "涨跌停/破板检测参数",
+    "min_limit_duration": 30,
+    "break_confirm_interval": 10,
+    "min_reseal_duration": 60,
+    "log_wait_interval": 60
   }
 }
