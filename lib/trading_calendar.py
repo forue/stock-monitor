@@ -88,6 +88,20 @@ def is_trading_session() -> Tuple[bool, str]:
     return False, "盘后"
 
 
+def is_post_close_window() -> bool:
+    """
+    判断是否在收盘冗余采集窗口 (15:00-15:10)
+    
+    收盘后需要额外采集一次数据，保存当日收盘价供次日计算涨跌停价使用。
+    避免最后一次采集在14:58导致收盘价不准确。
+    """
+    if not is_trading_day():
+        return False
+    
+    current_time = datetime.now().time()
+    return dt_time(15, 0) < current_time <= dt_time(15, 10)
+
+
 def get_trading_elapsed_ratio() -> float:
     """
     计算当日已过交易时间占比（用于量比修正）

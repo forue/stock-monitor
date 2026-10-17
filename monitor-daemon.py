@@ -41,8 +41,9 @@ sys.path.insert(0, str(BASE_DIR))
 # ============ 初始化模块 ============
 from lib.logger import init_logger, log
 from lib.config import load_config, reload_config_if_changed, init_config_mtime, load_env_file
-from lib.trading_calendar import is_trading_session, get_check_interval
+from lib.trading_calendar import is_trading_session, is_post_close_window, get_check_interval
 from lib.data_fetcher import fetch_free_data, fetch_fund_flow, fetch_order_book
+from lib.close_cache import save_close_price
 from lib.volatility import calculate_volatility
 from lib.alerter import (should_trigger_l1, confirm_alert, reset_stock_tracker,
                          check_trading_signal, check_fund_flow_signal,
@@ -87,6 +88,7 @@ def main():
 
         last_heartbeat = None
         _stock_failures = {}  # {code: {'count': N, 'skip_until': timestamp}}
+        _post_close_done = False  # 收盘冗余采集是否已完成
 
         # ============ 主循环 ============
         while process_mod.running:
@@ -96,6 +98,36 @@ def main():
 
                 # 1. 判断交易时段
                 in_session, session_name = is_trading_session()
+
+                # 收盘后冗余采集 (15:00-15:10)
+                if not in_session and is_post_close_window() and not _post_close_done:
+                    log("收盘冗余采集窗口，获取最终收盘价...")
+                    stocks = config.get('stocks', [])
+                    for stock in stocks:
+                        if not stock.get('enabled', True):
+                            continue
+                        stock_code = stock['code']
+                        stock_name = stock.get('name', stock_code)
+                        
+                        interruptible_sleep(1.5)
+                        stock_data = fetch_free_data(stock_code)
+                        if stock_data:
+                            # 收盘时current_price就是当日收盘价
+                            save_close_price(
+                                stock_code,
+                                close_price=stock_data.get('close_price', 0),
+                                current_price=stock_data.get('current_price', 0)
+                            )
+                            log(f"  {stock_name} 收盘价: {stock_data.get('current_price', 0):.2f}")
+                    
+                    _post_close_done = True
+                    log("收盘冗余采集完成")
+                    interruptible_sleep(60)  # 采集完后再等1分钟
+                    continue
+
+                # 新交易日开始，重置收盘采集标记
+                if in_session:
+                    _post_close_done = False
 
                 if not in_session:
                     log(f"非交易时段 ({session_name})，休眠 15 分钟")

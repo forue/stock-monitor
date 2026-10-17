@@ -18,10 +18,12 @@ import json
 import os
 import requests
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Optional
 
 from lib.logger import log
+from lib.close_cache import get_prev_close
 
 # ============ QQ C2C 推送 ============
 
@@ -119,24 +121,81 @@ MAX_DAILY_NORMAL = 8             # 非极端每日上限
 MAX_DAILY_TOTAL = 15             # 绝对每日上限（含极端）
 
 # ============ 涨停/跌停状态追踪 ============
-# {stock_code: {'at_limit': bool, 'limit_type': 'up'|'down', 'limit_price': float, 'broken_direction': str}}
+# {stock_code: {'at_limit': bool, 'limit_type': 'up'|'down', 'limit_price': float,
+#               'first_limit_time': float, 'below_limit_since': float,
+#               'reseal_time': float, 'break_count': int}}
 _limit_state = {}
 _limit_state_date = None
+
+# 破板检测参数
+MIN_LIMIT_DURATION = 30           # 最短封板时长（秒），短于此视为假封板
+BREAK_CONFIRM_INTERVAL = 10       # 破板确认最小间隔（秒），防止瞬间抖动误报
+MIN_RESEAL_DURATION = 60          # 回封最短时长（秒），防止回封瞬间又破板的抖动
+
+
+def _calc_limit_price(close_price: float, limit_pct: float, direction: str) -> float:
+    """
+    精确计算涨跌停价
+    
+    A股规则：涨跌停价 = round(昨收 × (1 ± 幅度), 2)，四舍五入到分
+    
+    由于四舍五入，实际涨跌幅会在 9.85%~10.15% 之间浮动：
+        昨收 10.15 → 涨停 11.17 → 实际 +10.049%
+        昨收 12.34 → 涨停 13.57 → 实际 +9.968%
+        昨收 5.67  → 涨停 6.24  → 实际 +10.053%
+    
+    使用 Decimal 确保四舍五入（ROUND_HALF_UP），而非 Python 默认的银行家舍入
+    
+    Args:
+        close_price: 昨收价
+        limit_pct: 涨跌停幅度百分比 (10.0, 20.0, 5.0, 30.0)
+        direction: 'up' 或 'down'
+    Returns:
+        涨跌停价（精确到分）
+    """
+    close = Decimal(str(close_price))
+    pct = Decimal(str(limit_pct))
+    
+    if direction == 'up':
+        multiplier = Decimal('1') + pct / Decimal('100')
+    else:
+        multiplier = Decimal('1') - pct / Decimal('100')
+    
+    # 四舍五入到分（ROUND_HALF_UP）
+    result = (close * multiplier).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    return float(result)
+
+
+def _is_at_limit_price(current_price: float, limit_price: float, direction: str) -> bool:
+    """
+    判断当前价格是否处于涨跌停价
+    
+    使用精确价格对比，容差 0.005（半分），因为行情数据可能有精度误差
+    """
+    tol = 0.005
+    if direction == 'up':
+        return current_price >= (limit_price - tol)
+    else:
+        return current_price <= (limit_price + tol)
 
 
 def _get_limit_pct(stock_code: str) -> float:
     """
     根据股票代码判断涨跌停幅度
     
-    A股主板 (60xxxx, 00xxxx): ±10%
-    创业板 (30xxxx): ±20%
-    科创板 (68xxxx): ±20%
-    ST股票: ±5% (需要额外判断，这里先返回默认值)
+    A股规则：
+    - 主板 (60xxxx, 00xxxx): ±10%
+    - 创业板 (30xxxx): ±20%
+    - 科创板 (68xxxx): ±20%
+    - 北交所 (8xxxxx, 4xxxxx): ±30%
+    - ST股票: ±5% (需要额外判断，这里先返回默认值)
     """
     if stock_code.startswith('30'):
         return 20.0  # 创业板 ±20%
     elif stock_code.startswith('68'):
         return 20.0  # 科创板 ±20%
+    elif stock_code.startswith('8') or stock_code.startswith('4'):
+        return 30.0  # 北交所 ±30%
     else:
         return 10.0  # 主板 ±10%
 
@@ -145,7 +204,11 @@ def _reset_limit_state():
     """跨天重置涨停状态"""
     global _limit_state_date
     today = datetime.now().date()
-    if _limit_state_date != today:
+    if _limit_state_date is None:
+        # 首次调用，只设置日期不清空状态
+        _limit_state_date = today
+    elif _limit_state_date != today:
+        # 跨天，清空状态
         _limit_state.clear()
         _limit_state_date = today
 
@@ -178,7 +241,9 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
                      change_pct: float, notif: dict,
                      escalation_config: dict = None,
                      volatility: float = None,
-                     volume_ratio: float = None) -> Optional[str]:
+                     volume_ratio: float = None,
+                     close_price: float = None,
+                     high_price: float = None) -> Optional[str]:
     """
     判断是否应该发送本次告警
 
@@ -206,57 +271,105 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
 
     # ============ 涨停/跌停状态追踪 ============
     limit_state = _get_limit_state(stock_code)
-    
-    # 根据股票代码获取涨跌停幅度
     limit_pct = _get_limit_pct(stock_code)
+
+    # 精确涨跌停价计算
+    # 优先使用缓存的昨收价（更准确），其次使用数据源的close_price
+    exact_limit_price = None
+    limit_direction = 'up' if change_pct > 0 else 'down'
     
-    # 涨停/跌停检测：涨跌幅 >= limit_pct - 0.5% 视为涨停/跌停
-    at_limit_now = abs_pct >= (limit_pct - 0.5)
+    prev_close = get_prev_close(stock_code)  # 从缓存获取
+    if not prev_close or prev_close <= 0:
+        prev_close = close_price  # fallback到数据源
     
-    # 检测破板：之前在涨停，现在不在了
+    if prev_close and prev_close > 0:
+        exact_limit_price = _calc_limit_price(prev_close, limit_pct, limit_direction)
+
+    # 涨停/跌停判定：精确价格对比
+    if exact_limit_price is not None:
+        at_limit_now = _is_at_limit_price(current_price, exact_limit_price, limit_direction)
+    else:
+        # fallback：百分比阈值（精度较低）
+        at_limit_now = abs_pct >= (limit_pct - 0.5)
+
     was_at_limit = limit_state.get('at_limit', False)
     limit_type = limit_state.get('limit_type')
-    
-    # 如果之前不在涨停状态，但当前在涨停，则更新状态
-    if at_limit_now and not was_at_limit:
-        _set_limit_state(stock_code, {
-            'at_limit': True,
-            'limit_type': 'up' if change_pct > 0 else 'down',
-            'limit_price': current_price,
-            'first_limit_time': now,
-        })
-        limit_label = f"±{limit_pct:.0f}%"
-        log(f"{stock_name} 涨停/跌停检测：{change_pct:+.2f}% (阈值{limit_label})，进入涨停/跌停状态")
-    
-    # 更新涨停状态
+    below_limit_since = limit_state.get('below_limit_since')
+    first_limit_time = limit_state.get('first_limit_time', 0)
+    break_count = limit_state.get('break_count', 0)
+
     if at_limit_now:
         if not was_at_limit:
+            # 首次达到涨/跌停，或回封后再次达到
             _set_limit_state(stock_code, {
                 'at_limit': True,
-                'limit_type': 'up' if change_pct > 0 else 'down',
-                'limit_price': current_price,
+                'limit_type': limit_direction,
+                'limit_price': exact_limit_price or current_price,
                 'first_limit_time': now,
+                'below_limit_since': None,
+                'reseal_time': now if break_count > 0 else None,  # 回封时记录时间
+                'break_count': break_count,  # 保留破板次数
             })
-            # 首次涨停，允许第一次告警
-            pass
+            if break_count > 0:
+                log(f"{stock_name} 回封（第{break_count + 1}次封板）：{current_price:.2f} @ {exact_limit_price:.2f}")
+            else:
+                log(f"{stock_name} 涨/跌停：{current_price:.2f} @ {exact_limit_price:.2f} ({change_pct:+.2f}%)")
         else:
-            # 持续涨停，静默（不触发常规告警）
-            if state:  # 已有过告警
-                log(f"{stock_name} 持续涨停中，静默")
+            # 持续涨/跌停：清除破板计时
+            if below_limit_since is not None:
+                _set_limit_state(stock_code, {**limit_state, 'below_limit_since': None})
+            if state:  # 已有过告警则静默
+                log(f"{stock_name} 持续{'涨停' if limit_type == 'up' else '跌停'}中，静默")
                 return None
     else:
         if was_at_limit:
-            # 从涨停变为非涨停（破板）
-            _set_limit_state(stock_code, {
-                'at_limit': False,
-                'broken_direction': current_dir,
-                'broken_time': now,
-            })
+            # 涨/跌停后首次跌破 → 开始计时
+            if below_limit_since is None:
+                # 检查是否需要验证回封时长（如果之前已经破过板）
+                reseal_time = limit_state.get('reseal_time')
+                if break_count > 0 and reseal_time:
+                    reseal_duration = now - reseal_time
+                    if reseal_duration < MIN_RESEAL_DURATION:
+                        # 回封时间太短，视为抖动，不触发新破板
+                        log(f"{stock_name} 回封仅{reseal_duration:.0f}s(<{MIN_RESEAL_DURATION}s)，视为抖动")
+                        _set_limit_state(stock_code, {'at_limit': False, 'break_count': break_count})
+                        return None
+
+                _set_limit_state(stock_code, {
+                    'at_limit': True,
+                    'limit_type': limit_type,
+                    'limit_price': limit_state.get('limit_price'),
+                    'first_limit_time': first_limit_time,
+                    'below_limit_since': now,
+                    'break_count': break_count,
+                })
+                log(f"{stock_name} 首次跌破{'涨停' if limit_type == 'up' else '跌停'}，等待确认...")
+                return None
+            else:
+                # 已计时，检查是否满足破板条件
+                below_duration = now - below_limit_since
+                limit_duration = now - first_limit_time if first_limit_time else 0
+
+                # 条件1：封板时长足够（>=30秒，排除瞬间假封板）
+                # 条件2：跌破持续足够（>=10秒，排除瞬间抖动）
+                if limit_duration >= MIN_LIMIT_DURATION and below_duration >= BREAK_CONFIRM_INTERVAL:
+                    new_break_count = break_count + 1
+                    _set_limit_state(stock_code, {'at_limit': False, 'break_count': new_break_count})
+                    log(f"{stock_name} 破板确认（第{new_break_count}次）：封板{limit_duration:.0f}s，跌破{below_duration:.0f}s，当前{change_pct:+.2f}%")
+                    if limit_type == 'up':
+                        return "limit_break_up"
+                    else:
+                        return "limit_break_down"
+                else:
+                    # 条件不满足，继续等待
+                    log(f"{stock_name} 破板等待中：封板{limit_duration:.0f}s(<{MIN_LIMIT_DURATION}s) 或 跌破{below_duration:.0f}s(<{BREAK_CONFIRM_INTERVAL}s)")
+                    return None
         else:
-            _set_limit_state(stock_code, {'at_limit': False})
+            # 从未在涨/跌停
+            _set_limit_state(stock_code, {'at_limit': False, 'break_count': 0})
 
     # ============ 后告警抑制 ============
-    # 上次告警后，如果量小且波动低，跳过（但破板检测已绕过此逻辑）
+    # 上次告警后，如果量小且波动低，跳过
     if state:
         last_time = state.get("time", 0)
         elapsed_since_alert = now - last_time
@@ -264,16 +377,6 @@ def _should_escalate(stock_code: str, stock_name: str, current_price: float,
             if volume_ratio is not None and volume_ratio < 1.5 and volatility is not None and volatility < 0.03:
                 log(f"{stock_name} 后告警抑制：量比{volume_ratio:.2f}<1.5 且 波动率{volatility:.2%}<3%，跳过")
                 return None
-    
-    # ============ 涨停/跌停破板特殊处理 ============
-    # 如果检测到破板，立即返回（绕过所有后续检查）
-    if was_at_limit and not at_limit_now:
-        log(f"{stock_name} 破板确认：{limit_type}停→当前{change_pct:+.2f}%，触发破板告警")
-        _set_limit_state(stock_code, {'at_limit': False})
-        if limit_type == 'up':
-            return "limit_break_up"
-        else:
-            return "limit_break_down"
 
     # 第一次告警：直接允许
     if not state:
@@ -380,13 +483,15 @@ def send_alert(stock: dict, stock_data: dict, metrics: dict, config: dict,
     notif = config.get('notification', {})
     escalation_config = config.get('escalation', {})
 
-    # 阶梯式递增判断（传入波动率用于动态冷却，量比用于后告警抑制）
+    # 阶梯式递增判断（传入波动率用于动态冷却，量比用于后告警抑制，昨收/最高价用于精确破板检测）
     volatility = metrics.get('price_change_rate')
     volume_ratio = metrics.get('volume_ratio')
     escalation_scenario = _should_escalate(stock_code, stock_name,
                                            current_price, change_pct, notif,
                                            escalation_config, volatility,
-                                           volume_ratio)
+                                           volume_ratio,
+                                           close_price=stock_data.get('close_price'),
+                                           high_price=stock_data.get('high_price'))
     if escalation_scenario is None:
         return False
 
