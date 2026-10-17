@@ -30,6 +30,7 @@ echo $! > /tmp/stock-monitor.pid
   ```
 - **Per-stock technical analysis**: Each stock can override defaults in `tech_analysis` field
 - **Global defaults**: `tech_analysis_defaults` section in `config.json`
+- **Break detection**: `limit_detection` section configures break-limit detection parameters
 
 ## Key Commands#
 
@@ -74,7 +75,8 @@ Entry point: `monitor-daemon.py` → main loop:
 | `lib/config.py` | Load config + `.env` reader (`load_env_file()`) |
 | `lib/indicators.py` | **NEW** MA/RSI calc, golden/death cross detection, `detect_divergence()` (top/bottom divergence) |
 | `lib/alerter.py` | L1/L2 triggers + 11 scenario classifications (incl. limit_break_up/down) + `check_trading_signal()` + real-time checks: `check_fund_flow_signal()` / `check_order_book_signal()` / `check_divergence_signal()` |
-| `lib/notifier.py` | Staircase escalation alerts + limit state tracking (auto-detect board type) + post-alert suppression + `send_trading_signal()` + `send_feature_alert()` (real-time alert unified entry) |
+| `lib/notifier.py` | Staircase escalation alerts + limit state tracking (precise limit price via Decimal, configurable break detection) + post-alert suppression + `send_trading_signal()` + `send_feature_alert()` |
+| `lib/close_cache.py` | Post-close price caching (15:00-15:10) for next-day limit price calculation |
 | `lib/volatility.py` | Price change rate, amplitude, volume ratio |
 | `lib/data_fetcher.py` | Multi-source: qt.gtimg.cn → push2.eastmoney → hq.sina → hq.sina (fallback); + `fetch_fund_flow()` (EastMoney) + `fetch_order_book()` (Tencent 5-level) |
 | `lib/trading_calendar.py` | A-share calendar, session detection, dynamic intervals |
@@ -87,6 +89,7 @@ Real-time features are single-stock SERIAL requests (free sources rate-limit/ban
 
 - **Syntax check** (fast, no side effects): `python3 -m py_compile <file>`
 - **Full test**: `python3 scripts/test-flow.py`
+- **Break detection test**: `python3 scripts/test_break_limit.py` (23 test cases)
 - **QQ push test**: `python3 test-alert-push.py` (needs `.env` with valid credentials)
 - **Never** run unverified scripts with `&&` — use separate WSL commands
 
@@ -99,6 +102,7 @@ Real-time features are single-stock SERIAL requests (free sources rate-limit/ban
 5. **Golden cross**: Requires previous MA values for comparison (stored in `_prev_ma_state` dict)
 6. **Database reads only**: `get_close_history()` SELECTs only, never writes — safe for testing
 7. **Cron**: `*/30 * * * * /path/to/keepalive.sh` — script handles WSL env
+8. **ST stocks (2026-07-06+)**: 主板ST涨跌幅已统一为10%，不再有5%特殊限制
 
 ## File Structure (what matters)#
 
