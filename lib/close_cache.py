@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from lib.logger import log
+from lib.trading_calendar import get_prev_trading_day
 
 # 缓存文件路径
 CACHE_FILE = Path(__file__).parent.parent / "data" / "close_prices.json"
@@ -128,12 +129,15 @@ def get_prev_close(stock_code: str) -> Optional[float]:
     """
     获取前一交易日的收盘价
     
-    优先级：
-    1. 缓存中最近一个交易日的收盘价
-    2. 如果没有缓存，返回 None（由调用方使用数据源的close_price）
+    严格校验：缓存日期必须等于"上一个交易日"才使用，否则返回 None。
+    这样可以防止系统漏跑某天后，使用过期的收盘价计算涨跌停价。
+    
+    例：今天 10-30，上一交易日应为 10-29
+        - 缓存有 10-29 → ✅ 使用
+        - 缓存只有 10-28（10-29 系统没跑）→ ❌ 返回 None，回退数据源
     
     Returns:
-        前收盘价，如果无缓存返回 None
+        前收盘价；无有效缓存时返回 None（调用方回退到数据源 close_price）
     """
     cache = _load_cache()
     
@@ -141,27 +145,22 @@ def get_prev_close(stock_code: str) -> Optional[float]:
         return None
     
     entries = cache[stock_code]
-    today = date.today()
+    expected_date = get_prev_trading_day(date.today())
+    expected_str = expected_date.isoformat()
     
-    # 找到最近一个非今天的日期
-    best_date = None
-    best_close = None
+    data = entries.get(expected_str)
+    if not data:
+        # 缓存中缺少上一交易日的数据（可能系统漏跑）
+        available = sorted(entries.keys())
+        log(f"缓存缺少上一交易日({expected_str})数据: {stock_code} "
+            f"已有[{','.join(available)}]，回退数据源", level="DEBUG")
+        return None
     
-    for date_str, data in entries.items():
-        try:
-            entry_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            # 必须是今天之前的日期
-            if entry_date < today:
-                if best_date is None or entry_date > best_date:
-                    best_date = entry_date
-                    best_close = data.get('close')
-        except ValueError:
-            continue
+    close = data.get('close')
+    if close:
+        log(f"使用缓存收盘价: {stock_code} = {close:.2f} ({expected_str})", level="DEBUG")
     
-    if best_close:
-        log(f"使用缓存收盘价: {stock_code} = {best_close:.2f} ({best_date})", level="DEBUG")
-    
-    return best_close
+    return close
 
 
 def clear_cache():

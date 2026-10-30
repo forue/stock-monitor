@@ -90,6 +90,7 @@ Real-time features are single-stock SERIAL requests (free sources rate-limit/ban
 - **Syntax check** (fast, no side effects): `python3 -m py_compile <file>`
 - **Full test**: `python3 scripts/test-flow.py`
 - **Break detection test**: `python3 scripts/test_break_limit.py` (23 test cases)
+- **Close cache test**: `python3 scripts/test_close_cache.py` (prev trading day + staleness)
 - **QQ push test**: `python3 test-alert-push.py` (needs `.env` with valid credentials)
 - **Never** run unverified scripts with `&&` — use separate WSL commands
 
@@ -103,6 +104,7 @@ Real-time features are single-stock SERIAL requests (free sources rate-limit/ban
 6. **Database reads only**: `get_close_history()` SELECTs only, never writes — safe for testing
 7. **Cron**: `*/30 * * * * /path/to/keepalive.sh` — script handles WSL env
 8. **ST stocks (2026-07-06+)**: 主板ST涨跌幅已统一为10%，不再有5%特殊限制
+9. **Close cache staleness**: `get_prev_close()` only uses cache if it matches the *previous trading day*; otherwise returns None → falls back to data source `close_price`. This prevents wrong limit prices after the system skips a day. `date` command is WSL/Asia-Shanghai.
 
 ## File Structure (what matters)#
 

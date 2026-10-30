@@ -5,7 +5,7 @@ A 股交易日历模块 - 交易日判断/交易时段/时间占比
 复用 scripts/trading_calendar.py 并扩展
 """
 
-from datetime import datetime, date, time as dt_time
+from datetime import datetime, date, timedelta, time as dt_time
 from typing import Tuple
 
 # 2026 A 股休市日（周一~周五，不含周末）
@@ -48,6 +48,30 @@ def is_trading_day(d=None) -> bool:
     if d in HOLIDAYS_2026:
         return False
     return True
+
+
+def get_prev_trading_day(ref_date=None) -> date:
+    """
+    获取给定日期之前的上一个交易日
+
+    Args:
+        ref_date: 参考日期，默认今天。返回严格早于该日期的最近交易日。
+
+    Returns:
+        上一个交易日 (date)
+    """
+    if ref_date is None:
+        ref_date = date.today()
+    elif isinstance(ref_date, datetime):
+        ref_date = ref_date.date()
+
+    d = ref_date - timedelta(days=1)
+    # 最多回溯 30 天（覆盖长假）
+    for _ in range(30):
+        if is_trading_day(d):
+            return d
+        d -= timedelta(days=1)
+    return d
 
 
 def is_trading_session() -> Tuple[bool, str]:
