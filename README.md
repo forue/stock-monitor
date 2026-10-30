@@ -481,8 +481,13 @@ python3 /home/node/.openclaw/workspace/stock-monitor/scripts/test-flow.py
 # QQ 推送测试
 python3 /home/node/.openclaw/workspace/stock-monitor/scripts/test-qq-push.py
 
-# 模拟告警推送 (临时测试文件)
-python3 /home/node/.openclaw/workspace/stock-monitor/test-alert-push.py
+# 数据回填工具：补录漏采的行情数据
+#   分时模式：仅能回填最近交易日（腾讯分时接口只返回最新一天）
+python3 /home/node/.openclaw/workspace/stock-monitor/scripts/backfill.py --mode minute --dry-run
+#   日K模式：任意历史日期，每只写入1条收盘快照
+python3 /home/node/.openclaw/workspace/stock-monitor/scripts/backfill.py --mode daily --date 2026-10-28 --dry-run
+
+# 模拟告警推送 (临时测试文件)python3 /home/node/.openclaw/workspace/stock-monitor/test-alert-push.py
 
 # 数据源获取测试 (临时测试文件)
 python3 /home/node/.openclaw/workspace/stock-monitor/test-fetch-data.py
